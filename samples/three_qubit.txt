@@ -1,0 +1,6 @@
+qubit q0, q1, q2
+H q0
+CNOT q0, q1
+X q2
+CNOT q1, q2
+measure q0, q1, q2

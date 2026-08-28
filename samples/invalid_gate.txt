@@ -1,0 +1,3 @@
+qubit q0, q1
+CNT q0, q1
+measure q0, q1
