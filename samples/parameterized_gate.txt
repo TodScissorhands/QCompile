@@ -1,0 +1,4 @@
+qubit q0
+RZ(0.5) q0
+RZ(2 * theta - 0.1) q0
+measure q0

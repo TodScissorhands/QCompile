@@ -8,28 +8,34 @@
 
 class Parser {
 public:
-    Parser(const std::vector<Token>& tokenList);
+  Parser(const std::vector<Token> &tokenList);
 
-    Program parse();
+  Program parse();
 
 private:
-    const std::vector<Token>& tokens;
+  const std::vector<Token> &tokens;
 
-    int current;
+  int current;
 
-    const Token& peek() const;
+  const Token &peek() const;
 
-    const Token& advance();
+  const Token &advance();
 
-    bool check(TokenType type) const;
+  bool check(TokenType type) const;
 
-    bool match(TokenType type);
+  bool match(TokenType type);
 
-    void skipNewlines();
+  void skipNewlines();
 
-    void expect(TokenType type);
+  void expect(TokenType type);
 
-    std::vector<std::string> parseNameList();
+  std::vector<std::string> parseNameList();
 
-    Statement parseStatement();
+  Expression parseExpression();
+
+  Expression parseTerm();
+
+  Expression parseFactor();
+
+  Statement parseStatement();
 };

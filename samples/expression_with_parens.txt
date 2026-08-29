@@ -1,0 +1,3 @@
+qubit q0
+RZ((2 + 3) * 4) q0
+measure q0

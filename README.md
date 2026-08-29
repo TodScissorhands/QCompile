@@ -25,7 +25,15 @@ CNOT q0, q1
 measure q0, q1
 ```
 
-The keywords are `qubit` and `measure`. The supported gate names are `H`, `X`, `Z`, and `CNOT`. Identifiers such as `q0` and `q1` name qubits. Commas separate multiple names, and newlines separate statements.
+The keywords are `qubit` and `measure`. The supported gate names are `H`, `X`, `Z`, `CNOT`, and `RZ`. Identifiers such as `q0` and `q1` name qubits. Commas separate multiple names, and newlines separate statements.
+
+Gates may optionally have one arithmetic expression in parentheses before the qubit list. Expressions can use number literals, identifiers such as `theta`, the operators `+`, `-`, `*`, and `/`, and parentheses. Multiplication and division have higher precedence than addition and subtraction. Unary minus is also supported.
+
+```text
+qubit q0
+RZ(0.5 + 0.25) q0
+RZ(2 * theta - 0.1) q0
+```
 
 Example Bell-state program:
 
@@ -95,4 +103,5 @@ Other samples can be run in the same way:
 ./qcompile samples/sequential_gates.txt
 ./qcompile samples/three_qubit.txt
 ./qcompile samples/invalid_gate.txt
+./qcompile samples/parameterized_gate.txt
 ```
