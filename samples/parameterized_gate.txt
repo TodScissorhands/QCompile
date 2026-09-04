@@ -1,3 +1,4 @@
+let theta = 0.25
 qubit q0
 RZ(0.5) q0
 RZ(2 * theta - 0.1) q0

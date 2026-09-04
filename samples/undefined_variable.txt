@@ -1,0 +1,3 @@
+qubit q0
+RZ(theta) q0
+measure q0

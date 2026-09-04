@@ -8,6 +8,8 @@ Token classifyWord(const std::string &word, int line, int column) {
     return {TokenType::KeywordQubit, word, line, column};
   } else if (word == "measure") {
     return {TokenType::KeywordMeasure, word, line, column};
+  } else if (word == "let") {
+    return {TokenType::KeywordLet, word, line, column};
   } else if (word == "H" || word == "X" || word == "Z" || word == "CNOT" ||
              word == "RZ") {
     return {TokenType::Gate, word, line, column};
@@ -86,6 +88,10 @@ std::vector<Token> Lexer::tokenize() const {
       tokens.push_back({TokenType::Slash, "/", line, column});
       position = position + 1;
       column = column + 1;
+    } else if (current == '=') {
+      tokens.push_back({TokenType::Equal, "=", line, column});
+      position = position + 1;
+      column = column + 1;
     } else if (std::isalpha(static_cast<unsigned char>(current)) ||
                current == '_') {
       int start = position;
@@ -122,6 +128,8 @@ const char *tokenTypeName(TokenType type) {
     return "KeywordQubit";
   case TokenType::KeywordMeasure:
     return "KeywordMeasure";
+  case TokenType::KeywordLet:
+    return "KeywordLet";
   case TokenType::Gate:
     return "Gate";
   case TokenType::Identifier:
@@ -146,6 +154,8 @@ const char *tokenTypeName(TokenType type) {
     return "Star";
   case TokenType::Slash:
     return "Slash";
+  case TokenType::Equal:
+    return "Equal";
   }
 
   return "Unknown";

@@ -4,7 +4,11 @@
 #include <vector>
 
 // The enum tags the plain Statement record without using a class hierarchy.
-enum class StatementType { QubitDeclaration, GateOperation };
+enum class StatementType {
+  QubitDeclaration,
+  VariableDeclaration,
+  GateOperation
+};
 
 enum class ExpressionType {
   NumberLiteral,
@@ -17,13 +21,16 @@ struct Expression {
   ExpressionType type;
   std::string text;
   char operation;
-  // A binary expression has two children; unary minus has one.
+  // binary expression -> two children; unary minus -> one children.
   std::vector<Expression> children;
 };
 
 struct Statement {
   StatementType type;
+  int line;
   std::vector<std::string> names;
+  std::string variableName;
+  Expression variableExpression;
   std::string gate;
   std::vector<std::string> qubits;
   bool hasParameter;

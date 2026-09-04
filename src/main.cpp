@@ -1,5 +1,8 @@
+#include "code_generator.h"
 #include "lexer.h"
 #include "parser.h"
+#include "semantic_checker.h"
+#include "simulator.h"
 
 #include <fstream>
 #include <iostream>
@@ -54,6 +57,10 @@ void printProgram(const Program &program) {
         std::cout << statement.names[j];
       }
 
+      std::cout << '\n';
+    } else if (statement.type == StatementType::VariableDeclaration) {
+      std::cout << "VariableDecl: " << statement.variableName << " = ";
+      printExpression(statement.variableExpression, 0);
       std::cout << '\n';
     } else if (statement.type == StatementType::GateOperation) {
       std::cout << "GateOp: " << statement.gate;
@@ -138,6 +145,22 @@ int main(int argc, char *argv[]) {
     printProgram(program);
     std::cout << "Parsed " << program.statements.size() << " statements from "
               << countSourceLines(tokens) << " lines.\n";
+
+    SemanticResult semanticResult = checkSemantics(program);
+    if (!semanticResult.errors.empty()) {
+      std::cerr << "\nSemantic errors:\n";
+      for (int i = 0; i < static_cast<int>(semanticResult.errors.size()); i = i + 1) {
+        std::cerr << semanticResult.errors[i] << '\n';
+      }
+      return 1;
+    }
+
+    std::vector<Instruction> instructions =
+        generateInstructions(program, semanticResult);
+    printInstructions(instructions);
+
+    Simulator simulator(static_cast<int>(semanticResult.qubitNames.size()));
+    simulator.run(instructions);
   } catch (const std::exception &error) {
     std::cerr << error.what() << '\n';
     std::cerr << "Failed to parse - see error above.\n";

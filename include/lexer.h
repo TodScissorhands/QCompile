@@ -6,6 +6,7 @@
 enum class TokenType {
   KeywordQubit,
   KeywordMeasure,
+  KeywordLet,
   Gate,
   Identifier,
   Number,
@@ -17,7 +18,8 @@ enum class TokenType {
   Plus,
   Minus,
   Star,
-  Slash
+  Slash,
+  Equal
 };
 
 struct Token {

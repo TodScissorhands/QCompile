@@ -127,17 +127,32 @@ Statement Parser::parseStatement() {
   if (match(TokenType::KeywordQubit)) {
     Statement statement;
     statement.type = StatementType::QubitDeclaration;
+    statement.line = tokens[current - 1].line;
     statement.hasParameter = false;
     statement.names = parseNameList();
     return statement;
   }
 
+  if (match(TokenType::KeywordLet)) {
+    Statement statement;
+    statement.type = StatementType::VariableDeclaration;
+    statement.line = tokens[current - 1].line;
+    statement.hasParameter = false;
+    expect(TokenType::Identifier);
+    statement.variableName = tokens[current - 1].text;
+    expect(TokenType::Equal);
+    statement.variableExpression = parseExpression();
+    return statement;
+  }
+
   if (check(TokenType::Gate) || check(TokenType::KeywordMeasure)) {
+    int statementLine = peek().line;
     std::string gateName = peek().text;
     advance();
 
     Statement statement;
     statement.type = StatementType::GateOperation;
+    statement.line = statementLine;
     statement.gate = gateName;
 
     if (match(TokenType::LeftParen)) {
