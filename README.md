@@ -187,6 +187,4 @@ Open `http://127.0.0.1:4173` in a web browser. The server executes allowlisted b
 
 ## References and Documentation
 
-For complete technical specifications, language grammar, error catalogs, eigensolver derivations, and chemistry provenance, refer to:
-- [Technical Reference Manual (`DOCUMENTATION.md`)](DOCUMENTATION.md)
-- [Milestone 1 Report (`MILESTONE_1_REPORT.md`)](MILESTONE_1_REPORT.md)
+For complete technical specifications, language grammar, error catalogs, eigensolver derivations, and chemistry provenance, refer to the [Technical Reference Manual (`DOCUMENTATION.md`)](DOCUMENTATION.md).
