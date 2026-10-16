@@ -1,0 +1,23 @@
+  Threads set to 1 by Python driver.
+
+  Memory set to 953.674 MiB by Python driver.
+
+Scratch directory: /home/tod/QCompile/benchmarks/heh_plus/.psi4-scratch/
+   => Libint2 <=
+
+    Primary   basis highest AM E, G, H:  7, 6, 4
+    Auxiliary basis highest AM E, G, H:  7, 7, 6
+    Onebody   basis highest AM E, G, H:  -, -, -
+    Solid Harmonics ordering:            Gaussian
+
+*** tstart() called on archlinux
+*** at Fri Oct 16 02:01:33 2026
+
+   => Loading Basis Set <=
+
+    Name: STO-3G
+    Role: ORBITAL
+    Keyword: BASIS
+    atoms 1 entry HE         line    25 file /home/tod/QCompile/benchmarks/heh_plus/.conda-psi4/share/psi4/basis/sto-3g.gbs 
+    atoms 2 entry H          line    19 file /home/tod/QCompile/benchmarks/heh_plus/.conda-psi4/share/psi4/basis/sto-3g.gbs 
+

@@ -1,0 +1,48 @@
+{
+  "program": "Psi4",
+  "version": "1.9.1",
+  "python": "3.11.17",
+  "method": "FCI (Psi4 DETCI), RHF closed-shell singlet reference",
+  "geometry": {
+    "atoms": [
+      [
+        "He",
+        0.0,
+        0.0,
+        0.0
+      ],
+      [
+        "H",
+        0.0,
+        0.0,
+        1.463283
+      ]
+    ],
+    "unit": "bohr",
+    "distance_bohr": 1.463283
+  },
+  "basis": "STO-3G",
+  "charge": 1,
+  "multiplicity": 1,
+  "electron_count": 2,
+  "nalpha": 1,
+  "nbeta": 1,
+  "spatial_orbitals": 2,
+  "frozen_docc": 0,
+  "frozen_uocc": 0,
+  "energies_hartree": {
+    "electronic_fci": -4.218264154490385,
+    "nuclear_repulsion": 1.3667896093920315,
+    "total_born_oppenheimer": -2.8514745450983536
+  },
+  "spin_diagnostic_s_squared": null,
+  "settings": {
+    "SCF": "RHF; scf_type=pk; e_convergence=1e-12; d_convergence=1e-12; maxiter=100",
+    "FCI": "num_roots=1; r_convergence=1e-10; ci_maxiter=100; CALC_S_SQUARED=true",
+    "symmetry": "C1",
+    "threads": 1,
+    "memory": "1 GB",
+    "energy_convention": "Psi4 FCI total energy includes nuclear repulsion; electronic energy is total minus nuclear repulsion",
+    "scratch_directory": "/home/tod/QCompile/benchmarks/heh_plus/.psi4-scratch-libint290-attempt1-retry"
+  }
+}

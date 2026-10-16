@@ -1,0 +1,526 @@
+{
+  "benchmark": {
+    "system": "HeH+",
+    "geometry": "He 0.0 0.0 0.0; H 0.0 0.0 1.463283",
+    "distance_bohr": 1.463283,
+    "basis": "STO-3G",
+    "charge": 1,
+    "electrons": 2,
+    "spin": 0,
+    "state": "singlet S=0",
+    "method": "RHF integrals; FCI by determinant diagonalization",
+    "orbitals_retained": 2,
+    "spin_orbitals": 4,
+    "qubits": 4,
+    "mapping": "Jordan-Wigner",
+    "symmetry_reduction": "none",
+    "spin_orbital_order": [
+      "0 alpha",
+      "1 alpha",
+      "0 beta",
+      "1 beta"
+    ],
+    "basis_bit_order": "q0 is least-significant bit; occupation bit q equals spin-orbital q",
+    "pauli_label_order": "Qiskit label left-to-right is q3..q0; rightmost character is q0",
+    "hamiltonian_energy_convention": "electronic only; nuclear repulsion excluded"
+  },
+  "settings": {
+    "rhf_conv_tol_hartree": 1e-12,
+    "rhf_max_cycle": 100,
+    "initial_guess": "MINAO",
+    "frozen_core": false,
+    "precision": "binary64 full precision JSON decimal serialization",
+    "checks_abs_tolerance": 2e-12,
+    "generator_versions": {
+      "python": "3.11.9",
+      "numpy": "2.4.6",
+      "pyscf": "2.8.0",
+      "qiskit": "2.5.2",
+      "qiskit_nature": "0.8.0"
+    }
+  },
+  "energies_hartree": {
+    "rhf_total_including_nuclear": -2.8418450940004742,
+    "rhf_electronic": -4.208634703392506,
+    "nuclear_repulsion": 1.3667896093920315,
+    "fci_electronic_singlet": -4.218264154490395,
+    "fci_total_born_oppenheimer": -2.8514745450983634,
+    "singlet_sector_dimension": 3,
+    "Ms0_determinant_sector_dimension": 4,
+    "Ms0_s2_eigenvalues": [
+      0.0,
+      0.0,
+      0.0,
+      2.0
+    ]
+  },
+  "integrals_hartree": {
+    "one_electron_mo_h_pq": [
+      [
+        -2.5758661668356027,
+        0.17296934164784686
+      ],
+      [
+        0.17296934164784675,
+        -1.3475972243115002
+      ]
+    ],
+    "two_electron_mo_chemist_eri_pqrs": [
+      [
+        [
+          [
+            0.9430976302786989,
+            -0.1729693416403126
+          ],
+          [
+            -0.1729693416403126,
+            0.6602370070496149
+          ]
+        ],
+        [
+          [
+            -0.17296934164031277,
+            0.14539262753680351
+          ],
+          [
+            0.14539262753680351,
+            0.03728869962852953
+          ]
+        ]
+      ],
+      [
+        [
+          [
+            -0.17296934164031277,
+            0.14539262753680351
+          ],
+          [
+            0.14539262753680351,
+            0.03728869962852953
+          ]
+        ],
+        [
+          [
+            0.6602370070496147,
+            0.03728869962852978
+          ],
+          [
+            0.03728869962852978,
+            0.7525240672858403
+          ]
+        ]
+      ]
+    ],
+    "nuclear_repulsion": 1.3667896093920315,
+    "qn_driver_one_electron_max_abs_residual_vs_direct_pyscf": 0.0,
+    "qn_driver_nuclear_max_abs_residual_vs_direct_pyscf": 0.0
+  },
+  "fermionic_operator_terms": [
+    {
+      "ladder_string": "+_0 -_0",
+      "coefficient": -2.5758661668356027
+    },
+    {
+      "ladder_string": "+_0 -_1",
+      "coefficient": 0.17296934164784686
+    },
+    {
+      "ladder_string": "+_1 -_0",
+      "coefficient": 0.17296934164784675
+    },
+    {
+      "ladder_string": "+_1 -_1",
+      "coefficient": -1.3475972243115002
+    },
+    {
+      "ladder_string": "+_2 -_2",
+      "coefficient": -2.5758661668356027
+    },
+    {
+      "ladder_string": "+_2 -_3",
+      "coefficient": 0.17296934164784686
+    },
+    {
+      "ladder_string": "+_3 -_2",
+      "coefficient": 0.17296934164784675
+    },
+    {
+      "ladder_string": "+_3 -_3",
+      "coefficient": -1.3475972243115002
+    },
+    {
+      "ladder_string": "+_0 +_0 -_0 -_0",
+      "coefficient": 0.47154881513934943
+    },
+    {
+      "ladder_string": "+_0 +_0 -_1 -_0",
+      "coefficient": -0.08648467082015639
+    },
+    {
+      "ladder_string": "+_0 +_1 -_0 -_0",
+      "coefficient": -0.08648467082015639
+    },
+    {
+      "ladder_string": "+_0 +_1 -_1 -_0",
+      "coefficient": 0.33011850352480737
+    },
+    {
+      "ladder_string": "+_0 +_2 -_2 -_0",
+      "coefficient": 0.47154881513934943
+    },
+    {
+      "ladder_string": "+_0 +_2 -_3 -_0",
+      "coefficient": -0.08648467082015639
+    },
+    {
+      "ladder_string": "+_0 +_3 -_2 -_0",
+      "coefficient": -0.08648467082015639
+    },
+    {
+      "ladder_string": "+_0 +_3 -_3 -_0",
+      "coefficient": 0.33011850352480737
+    },
+    {
+      "ladder_string": "+_0 +_0 -_0 -_1",
+      "coefficient": -0.08648467082015639
+    },
+    {
+      "ladder_string": "+_0 +_0 -_1 -_1",
+      "coefficient": 0.07269631376840176
+    },
+    {
+      "ladder_string": "+_0 +_1 -_0 -_1",
+      "coefficient": 0.07269631376840176
+    },
+    {
+      "ladder_string": "+_0 +_1 -_1 -_1",
+      "coefficient": 0.01864434981426489
+    },
+    {
+      "ladder_string": "+_0 +_2 -_2 -_1",
+      "coefficient": -0.08648467082015639
+    },
+    {
+      "ladder_string": "+_0 +_2 -_3 -_1",
+      "coefficient": 0.07269631376840176
+    },
+    {
+      "ladder_string": "+_0 +_3 -_2 -_1",
+      "coefficient": 0.07269631376840176
+    },
+    {
+      "ladder_string": "+_0 +_3 -_3 -_1",
+      "coefficient": 0.01864434981426489
+    },
+    {
+      "ladder_string": "+_1 +_0 -_0 -_0",
+      "coefficient": -0.08648467082015639
+    },
+    {
+      "ladder_string": "+_1 +_0 -_1 -_0",
+      "coefficient": 0.07269631376840176
+    },
+    {
+      "ladder_string": "+_1 +_1 -_0 -_0",
+      "coefficient": 0.07269631376840176
+    },
+    {
+      "ladder_string": "+_1 +_1 -_1 -_0",
+      "coefficient": 0.01864434981426489
+    },
+    {
+      "ladder_string": "+_1 +_2 -_2 -_0",
+      "coefficient": -0.08648467082015639
+    },
+    {
+      "ladder_string": "+_1 +_2 -_3 -_0",
+      "coefficient": 0.07269631376840176
+    },
+    {
+      "ladder_string": "+_1 +_3 -_2 -_0",
+      "coefficient": 0.07269631376840176
+    },
+    {
+      "ladder_string": "+_1 +_3 -_3 -_0",
+      "coefficient": 0.01864434981426489
+    },
+    {
+      "ladder_string": "+_1 +_0 -_0 -_1",
+      "coefficient": 0.33011850352480737
+    },
+    {
+      "ladder_string": "+_1 +_0 -_1 -_1",
+      "coefficient": 0.01864434981426489
+    },
+    {
+      "ladder_string": "+_1 +_1 -_0 -_1",
+      "coefficient": 0.01864434981426489
+    },
+    {
+      "ladder_string": "+_1 +_1 -_1 -_1",
+      "coefficient": 0.37626203364292016
+    },
+    {
+      "ladder_string": "+_1 +_2 -_2 -_1",
+      "coefficient": 0.33011850352480737
+    },
+    {
+      "ladder_string": "+_1 +_2 -_3 -_1",
+      "coefficient": 0.01864434981426489
+    },
+    {
+      "ladder_string": "+_1 +_3 -_2 -_1",
+      "coefficient": 0.01864434981426489
+    },
+    {
+      "ladder_string": "+_1 +_3 -_3 -_1",
+      "coefficient": 0.37626203364292016
+    },
+    {
+      "ladder_string": "+_2 +_0 -_0 -_2",
+      "coefficient": 0.47154881513934943
+    },
+    {
+      "ladder_string": "+_2 +_0 -_1 -_2",
+      "coefficient": -0.08648467082015639
+    },
+    {
+      "ladder_string": "+_2 +_1 -_0 -_2",
+      "coefficient": -0.08648467082015639
+    },
+    {
+      "ladder_string": "+_2 +_1 -_1 -_2",
+      "coefficient": 0.33011850352480737
+    },
+    {
+      "ladder_string": "+_2 +_2 -_2 -_2",
+      "coefficient": 0.47154881513934943
+    },
+    {
+      "ladder_string": "+_2 +_2 -_3 -_2",
+      "coefficient": -0.08648467082015639
+    },
+    {
+      "ladder_string": "+_2 +_3 -_2 -_2",
+      "coefficient": -0.08648467082015639
+    },
+    {
+      "ladder_string": "+_2 +_3 -_3 -_2",
+      "coefficient": 0.33011850352480737
+    },
+    {
+      "ladder_string": "+_2 +_0 -_0 -_3",
+      "coefficient": -0.08648467082015639
+    },
+    {
+      "ladder_string": "+_2 +_0 -_1 -_3",
+      "coefficient": 0.07269631376840176
+    },
+    {
+      "ladder_string": "+_2 +_1 -_0 -_3",
+      "coefficient": 0.07269631376840176
+    },
+    {
+      "ladder_string": "+_2 +_1 -_1 -_3",
+      "coefficient": 0.01864434981426489
+    },
+    {
+      "ladder_string": "+_2 +_2 -_2 -_3",
+      "coefficient": -0.08648467082015639
+    },
+    {
+      "ladder_string": "+_2 +_2 -_3 -_3",
+      "coefficient": 0.07269631376840176
+    },
+    {
+      "ladder_string": "+_2 +_3 -_2 -_3",
+      "coefficient": 0.07269631376840176
+    },
+    {
+      "ladder_string": "+_2 +_3 -_3 -_3",
+      "coefficient": 0.01864434981426489
+    },
+    {
+      "ladder_string": "+_3 +_0 -_0 -_2",
+      "coefficient": -0.08648467082015639
+    },
+    {
+      "ladder_string": "+_3 +_0 -_1 -_2",
+      "coefficient": 0.07269631376840176
+    },
+    {
+      "ladder_string": "+_3 +_1 -_0 -_2",
+      "coefficient": 0.07269631376840176
+    },
+    {
+      "ladder_string": "+_3 +_1 -_1 -_2",
+      "coefficient": 0.01864434981426489
+    },
+    {
+      "ladder_string": "+_3 +_2 -_2 -_2",
+      "coefficient": -0.08648467082015639
+    },
+    {
+      "ladder_string": "+_3 +_2 -_3 -_2",
+      "coefficient": 0.07269631376840176
+    },
+    {
+      "ladder_string": "+_3 +_3 -_2 -_2",
+      "coefficient": 0.07269631376840176
+    },
+    {
+      "ladder_string": "+_3 +_3 -_3 -_2",
+      "coefficient": 0.01864434981426489
+    },
+    {
+      "ladder_string": "+_3 +_0 -_0 -_3",
+      "coefficient": 0.33011850352480737
+    },
+    {
+      "ladder_string": "+_3 +_0 -_1 -_3",
+      "coefficient": 0.01864434981426489
+    },
+    {
+      "ladder_string": "+_3 +_1 -_0 -_3",
+      "coefficient": 0.01864434981426489
+    },
+    {
+      "ladder_string": "+_3 +_1 -_1 -_3",
+      "coefficient": 0.37626203364292016
+    },
+    {
+      "ladder_string": "+_3 +_2 -_2 -_3",
+      "coefficient": 0.33011850352480737
+    },
+    {
+      "ladder_string": "+_3 +_2 -_3 -_3",
+      "coefficient": 0.01864434981426489
+    },
+    {
+      "ladder_string": "+_3 +_3 -_2 -_3",
+      "coefficient": 0.01864434981426489
+    },
+    {
+      "ladder_string": "+_3 +_3 -_3 -_3",
+      "coefficient": 0.37626203364292016
+    }
+  ],
+  "pauli_hamiltonian_terms_hartree": [
+    {
+      "label_q3_to_q0": "IIII",
+      "coefficient": -2.9120172734747536
+    },
+    {
+      "label_q3_to_q0": "IIIZ",
+      "coefficient": 0.7583883292075204
+    },
+    {
+      "label_q3_to_q0": "IIYY",
+      "coefficient": 0.05256451032097764
+    },
+    {
+      "label_q3_to_q0": "IIXX",
+      "coefficient": 0.05256451032097764
+    },
+    {
+      "label_q3_to_q0": "IIZI",
+      "coefficient": 0.19189724869368352
+    },
+    {
+      "label_q3_to_q0": "IZII",
+      "coefficient": 0.7583883292075202
+    },
+    {
+      "label_q3_to_q0": "YYII",
+      "coefficient": 0.05256451032097764
+    },
+    {
+      "label_q3_to_q0": "XXII",
+      "coefficient": 0.05256451032097764
+    },
+    {
+      "label_q3_to_q0": "ZIII",
+      "coefficient": 0.19189724869368363
+    },
+    {
+      "label_q3_to_q0": "IIZZ",
+      "coefficient": 0.12871109487820281
+    },
+    {
+      "label_q3_to_q0": "IZIZ",
+      "coefficient": 0.23577440756967472
+    },
+    {
+      "label_q3_to_q0": "YYIZ",
+      "coefficient": 0.04324233541007819
+    },
+    {
+      "label_q3_to_q0": "XXIZ",
+      "coefficient": 0.04324233541007819
+    },
+    {
+      "label_q3_to_q0": "ZIIZ",
+      "coefficient": 0.16505925176240369
+    },
+    {
+      "label_q3_to_q0": "IZYY",
+      "coefficient": 0.04324233541007819
+    },
+    {
+      "label_q3_to_q0": "IZXX",
+      "coefficient": 0.04324233541007819
+    },
+    {
+      "label_q3_to_q0": "YYYY",
+      "coefficient": 0.03634815688420088
+    },
+    {
+      "label_q3_to_q0": "XXYY",
+      "coefficient": 0.03634815688420088
+    },
+    {
+      "label_q3_to_q0": "YYXX",
+      "coefficient": 0.03634815688420088
+    },
+    {
+      "label_q3_to_q0": "XXXX",
+      "coefficient": 0.03634815688420088
+    },
+    {
+      "label_q3_to_q0": "ZIYY",
+      "coefficient": -0.009322174907132445
+    },
+    {
+      "label_q3_to_q0": "ZIXX",
+      "coefficient": -0.009322174907132445
+    },
+    {
+      "label_q3_to_q0": "IZZI",
+      "coefficient": 0.16505925176240369
+    },
+    {
+      "label_q3_to_q0": "YYZI",
+      "coefficient": -0.009322174907132445
+    },
+    {
+      "label_q3_to_q0": "XXZI",
+      "coefficient": -0.009322174907132445
+    },
+    {
+      "label_q3_to_q0": "ZIZI",
+      "coefficient": 0.18813101682146008
+    },
+    {
+      "label_q3_to_q0": "ZZII",
+      "coefficient": 0.12871109487820281
+    }
+  ],
+  "matrix_validation": {
+    "method": "independent 16x16 determinant matrix from frozen h_pq and chemist-ordered (pq|rs) integrals, compared to Qiskit SparsePauliOp.to_matrix and Qiskit Nature FermionicOp ladder terms",
+    "maximum_absolute_pauli_vs_qn_fermionic_matrix_residual_hartree": 4.884981308350689e-15,
+    "maximum_absolute_integral_vs_qn_fermionic_matrix_residual_hartree": 1.1102230246251565e-16,
+    "maximum_absolute_integral_vs_pauli_matrix_residual_hartree": 4.884981308350689e-15,
+    "maximum_absolute_hermiticity_residual_hartree": 1.1102230246251565e-16,
+    "exact_singlet_energy_from_direct_integral_determinant_matrix_hartree": -4.218264154490395
+  }
+}

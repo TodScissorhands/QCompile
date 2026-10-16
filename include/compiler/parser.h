@@ -1,7 +1,7 @@
 #pragma once
 
-#include "ast.h"
-#include "lexer.h"
+#include "compiler/ast.h"
+#include "compiler/lexer.h"
 
 #include <string>
 #include <vector>

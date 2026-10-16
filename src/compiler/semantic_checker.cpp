@@ -1,4 +1,4 @@
-#include "semantic_checker.h"
+#include "compiler/semantic_checker.h"
 
 #include <stdexcept>
 

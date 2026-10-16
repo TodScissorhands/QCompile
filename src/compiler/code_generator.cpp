@@ -1,4 +1,4 @@
-#include "code_generator.h"
+#include "compiler/code_generator.h"
 
 #include <iostream>
 
@@ -18,6 +18,59 @@ int findQubitIndex(
 }
 
 } // namespace
+
+namespace {
+
+bool canCancel(const Instruction &left, const Instruction &right,
+               std::size_t qubitCount) {
+  if (left.type != InstructionType::ApplyGate ||
+      right.type != InstructionType::ApplyGate ||
+      left.gateName != right.gateName ||
+      left.qubitIndices != right.qubitIndices ||
+      left.parameterValue != 0.0 ||
+      right.parameterValue != 0.0) {
+    return false;
+  }
+
+  if (left.gateName == "H" || left.gateName == "X" ||
+      left.gateName == "Z") {
+    return left.qubitIndices.size() == 1 &&
+           left.qubitIndices[0] >= 0 &&
+           static_cast<std::size_t>(left.qubitIndices[0]) < qubitCount;
+  }
+
+  if (left.gateName == "CNOT") {
+    return left.qubitIndices.size() == 2 &&
+           left.qubitIndices[0] >= 0 &&
+           left.qubitIndices[1] >= 0 &&
+           static_cast<std::size_t>(left.qubitIndices[0]) < qubitCount &&
+           static_cast<std::size_t>(left.qubitIndices[1]) < qubitCount &&
+           left.qubitIndices[0] != left.qubitIndices[1];
+  }
+
+  return false;
+}
+
+} // namespace
+
+std::vector<Instruction> optimizeInstructions(
+    const std::vector<Instruction> &instructions,
+    std::size_t qubitCount
+) {
+  std::vector<Instruction> optimized;
+  optimized.reserve(instructions.size());
+
+  for (const Instruction &instruction : instructions) {
+    if (!optimized.empty() &&
+        canCancel(optimized.back(), instruction, qubitCount)) {
+      optimized.pop_back();
+    } else {
+      optimized.push_back(instruction);
+    }
+  }
+
+  return optimized;
+}
 
 std::vector<Instruction> generateInstructions(
     const Program &program,

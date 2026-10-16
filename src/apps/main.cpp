@@ -1,9 +1,10 @@
-#include "code_generator.h"
-#include "lexer.h"
-#include "parser.h"
-#include "semantic_checker.h"
-#include "simulator.h"
+#include "compiler/code_generator.h"
+#include "compiler/lexer.h"
+#include "compiler/parser.h"
+#include "compiler/semantic_checker.h"
+#include "simulator/simulator.h"
 
+#include <cstddef>
 #include <fstream>
 #include <iostream>
 #include <stdexcept>
@@ -155,11 +156,43 @@ int main(int argc, char *argv[]) {
       return 1;
     }
 
-    std::vector<Instruction> instructions =
+    const std::size_t qubitCount = semanticResult.qubitNames.size();
+    const std::vector<Instruction> originalInstructions =
         generateInstructions(program, semanticResult);
+    const std::vector<Instruction> instructions =
+        optimizeInstructions(originalInstructions, qubitCount);
+
+    const auto countInstructions = [](const std::vector<Instruction> &items,
+                                      InstructionType type) {
+      std::size_t count = 0;
+      for (const Instruction &instruction : items) {
+        if (instruction.type == type) {
+          ++count;
+        }
+      }
+      return count;
+    };
+    std::cout << "\nInstruction counts:\n"
+              << "  Original unitary gates: "
+              << countInstructions(originalInstructions,
+                                   InstructionType::ApplyGate)
+              << "\n  Optimized unitary gates: "
+              << countInstructions(instructions, InstructionType::ApplyGate)
+              << "\n  Original measurements: "
+              << countInstructions(originalInstructions, InstructionType::Measure)
+              << "\n  Optimized measurements: "
+              << countInstructions(instructions, InstructionType::Measure)
+              << '\n';
     printInstructions(instructions);
 
-    Simulator simulator(static_cast<int>(semanticResult.qubitNames.size()));
+    if (qubitCount > MAX_SIMULATOR_QUBITS) {
+      throw std::invalid_argument(
+          "Simulator supports between 0 and " +
+          std::to_string(MAX_SIMULATOR_QUBITS) + " qubits"
+      );
+    }
+
+    Simulator simulator(static_cast<int>(qubitCount));
     simulator.run(instructions);
   } catch (const std::exception &error) {
     std::cerr << error.what() << '\n';

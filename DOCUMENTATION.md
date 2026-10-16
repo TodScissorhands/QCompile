@@ -4,15 +4,16 @@
 
 QCompile is a small C++ compiler for a custom domain-specific language (DSL) that describes quantum circuits. It compiles a text program into instructions for a classical state-vector simulator. It does not communicate with real quantum hardware.
 
-The implemented pipeline has five stages:
+The implemented pipeline has six stages:
 
 1. **Lexer** — Reads source characters and creates tokens such as `KeywordQubit`, `Gate`, `Identifier`, `Number`, `Comma`, `Newline`, and arithmetic operators. Tokens preserve their original text and source location.
 2. **Parser** — Reads the token list and creates an abstract syntax tree (AST). The AST represents qubit declarations, variable declarations, gate operations, and arithmetic expression trees.
 3. **Semantic Checker** — Validates information that cannot be checked by token shape alone: qubits must be declared before use, gates must receive the right number of qubits, CNOT must use different control and target qubits, and parameter expressions must evaluate to numbers using already-declared variables.
 4. **Code Generator** — Converts valid AST statements into a flat vector of instructions. It changes qubit names such as `q0` into zero-based integer indices such as `0`.
-5. **Simulator** — Maintains a vector of complex amplitudes, applies the generated gates, calculates measurement probabilities, and samples a measurement result with a fixed random seed.
+5. **Instruction optimizer** — Removes adjacent identical H, X, Z, and ordered CNOT pairs. It leaves RZ, measurements, unknown gates, and malformed instructions unchanged.
+6. **Simulator** — Maintains a vector of complex amplitudes, applies the generated gates, calculates measurement probabilities, and samples a measurement result with a fixed random seed.
 
-The driver in `src/main.cpp` connects these stages in order. If parsing fails, later stages do not run. If semantic checking reports one or more errors, code generation and simulation do not run.
+The driver in `src/apps/main.cpp` connects these stages in order. If parsing fails, later stages do not run. If semantic checking reports one or more errors, code generation and simulation do not run.
 
 ## 2. Language Specification
 
@@ -136,7 +137,7 @@ The simulator uses `std::mt19937` seeded with `12345`, so this build produces th
 
 ## 3. Header File Reference
 
-### `include/ast.h`
+### `include/compiler/ast.h`
 
 This header defines the structures shared between parsing, semantic checking, code generation, and printing.
 
@@ -182,7 +183,7 @@ One struct is reused for all statement kinds; fields relevant to the selected `t
 
 - `statements` holds every parsed statement in source order. Later stages walk this vector from beginning to end, which is important because declarations must come before uses.
 
-### `include/lexer.h`
+### `include/compiler/lexer.h`
 
 #### `enum class TokenType`
 
@@ -205,7 +206,7 @@ One struct is reused for all statement kinds; fields relevant to the selected `t
 
 - `const char *tokenTypeName(TokenType type)` converts a token enum value into readable text for the token trace printed by `main.cpp`.
 
-### `include/parser.h`
+### `include/compiler/parser.h`
 
 #### `class Parser`
 
@@ -225,7 +226,7 @@ One struct is reused for all statement kinds; fields relevant to the selected `t
 - `parseFactor()` parses a number, identifier, unary minus, or parenthesized expression.
 - `parseStatement()` chooses and parses one qubit declaration, variable declaration, or gate operation.
 
-### `include/semantic_checker.h`
+### `include/compiler/semantic_checker.h`
 
 #### `struct SemanticResult`
 
@@ -241,7 +242,7 @@ One struct is reused for all statement kinds; fields relevant to the selected `t
 
 - `SemanticResult checkSemantics(const Program &program)` walks the AST in order, collects all semantic errors, evaluates valid variables and parameters, and returns the result.
 
-### `include/code_generator.h`
+### `include/compiler/code_generator.h`
 
 #### `enum class InstructionType`
 
@@ -260,7 +261,7 @@ One struct is reused for all statement kinds; fields relevant to the selected `t
 - `generateInstructions(const Program &program, const SemanticResult &result)` converts non-declaration AST statements into simulator instructions. It assumes semantic checking has already succeeded.
 - `printInstructions(const std::vector<Instruction> &instructions)` prints the flat instruction list for the user.
 
-### `include/simulator.h`
+### `include/simulator/simulator.h`
 
 #### `class Simulator`
 
@@ -276,7 +277,7 @@ One struct is reused for all statement kinds; fields relevant to the selected `t
 
 ## 4. Source File Reference
 
-### `src/lexer.cpp`
+### `src/compiler/lexer.cpp`
 
 `classifyWord` receives a complete word and its location. It returns keyword tokens for `qubit`, `measure`, and `let`, a `Gate` token for `H`, `X`, `Z`, `CNOT`, and `RZ`, and an `Identifier` for every other valid word. This separation lets the parser distinguish statement starts without needing to compare raw strings everywhere.
 
@@ -286,7 +287,7 @@ One struct is reused for all statement kinds; fields relevant to the selected `t
 
 `tokenTypeName` is a `switch` that maps each `TokenType` enum member to the readable names shown in the driver output.
 
-### `src/parser.cpp`
+### `src/compiler/parser.cpp`
 
 `Parser::Parser` stores a reference to the complete token list and initializes `current` to zero.
 
@@ -308,7 +309,7 @@ One struct is reused for all statement kinds; fields relevant to the selected `t
 
 `parse` skips initial blank lines, repeatedly parses one statement, requires a newline unless EOF follows immediately, and then skips extra blank lines. Its EOF exception permits an input file without a final newline.
 
-### `src/semantic_checker.cpp`
+### `src/compiler/semantic_checker.cpp`
 
 The anonymous-namespace helper `findNameIndex` searches a vector of names with a plain loop and returns its index or `-1`. Both qubit and variable lookup use this simple approach, which keeps the symbol tables beginner-readable.
 
@@ -318,15 +319,18 @@ The anonymous-namespace helper `evaluateExpression` recursively evaluates an `Ex
 
 For gate operations, `checkSemantics` reports every undeclared operand, checks required arity for `H`, `X`, `Z`, `RZ`, and `CNOT`, rejects a CNOT that uses the same qubit twice, requires a parameter for `RZ`, and rejects parameters for all other operation names. If a parameter exists, it evaluates the expression and saves the result at the same index as the statement. The function returns every collected error rather than throwing after the first one.
 
-### `src/code_generator.cpp`
+### `src/compiler/code_generator.cpp`
 
 The anonymous-namespace helper `findQubitIndex` searches the validated declaration-order qubit list and returns a zero-based index. Semantic checking has already guaranteed that each use exists, so generation can safely use this result.
 
 `generateInstructions` walks the AST in order. It skips qubit and variable declarations because they are compile-time information, not simulator actions. For each gate operation, it creates an `Instruction`, copies the gate name and evaluated parameter value, chooses `Measure` when the source name is `measure`, converts every source qubit name to an integer index, and appends the instruction. Converting names here separates the user-facing source language from the simulator's fast numeric representation.
 
 `printInstructions` prints each instruction in a demonstration-friendly form. Gate instructions use `APPLY`; `RZ` includes its evaluated numeric value; measurement instructions use `MEASURE`; and all operands print as bracketed indices.
+`optimizeInstructions` receives the validated circuit qubit count and performs a single left-to-right vector pass. It cancels only adjacent `ApplyGate` instructions with identical gate names and ordered qubit indices for H, X, Z, or CNOT. The supported single-qubit gates require exactly one index in `[0, qubitCount)`; CNOT requires two distinct indices in that range. These gates must have the unused `parameterValue` equal to zero. The output stack allows repeated cancellations to expose a new adjacent pair, while every measurement, RZ, unknown gate, and malformed instruction remains a barrier. It never commutes gates or removes operations across measurement.
 
-### `src/simulator.cpp`
+The command-line driver runs this pass after generation and before simulation. It prints original and optimized unitary-gate counts separately from the original and optimized measurement counts. It does not report circuit depth.
+
+### `src/simulator/simulator.cpp`
 
 `Simulator::Simulator` stores the qubit count, seeds `randomGenerator` with `12345`, creates a complex state vector of size `1 << qubitCount`, fills it with zero amplitudes, and sets `state[0]` to `1 + 0i`. This represents the all-zero quantum state.
 
@@ -340,7 +344,7 @@ The anonymous-namespace helper `findQubitIndex` searches the validated declarati
 
 `run` loops through generated instructions. Measurement instructions call `measure`. `H`, `X`, and `Z` provide their fixed 2x2 matrix entries to `applySingleQubitGate`. `RZ` computes phases `exp(-i theta/2)` and `exp(i theta/2)` from the evaluated parameter and applies the diagonal matrix. `CNOT` calls `applyCNOT` with its two indices.
 
-### `src/main.cpp`
+### `src/apps/main.cpp`
 
 `printExpression` recursively reconstructs an AST expression in readable infix form. It assigns precedence values to binary and unary nodes and adds parentheses only when an expression would otherwise bind less tightly than its parent. This is why printed AST expressions preserve important grouping such as `RZ((2 + 3) * 4)`.
 
@@ -375,9 +379,95 @@ QCompile deliberately keeps the DSL small so every implemented rule can be demon
 - **No control flow:** There are no conditionals, loops, or runtime branches. This avoids adding execution-state rules beyond the current straight-line circuit model.
 - **No registers or arrays:** Qubits are declared as individual names in a comma-separated list. Array indexing and register-wide operations would require additional grammar, semantic rules, and code-generation behavior.
 - **No subroutines:** The language has no user-defined gate definitions, parameterized function calls, or reusable circuit blocks. This keeps source ordering and gate expansion simple.
-- **No circuit optimization:** The code generator preserves source operation order. It does not cancel gates, merge rotations, reduce gate count, or map gates to hardware connectivity.
+- **Limited circuit optimization:** The pass cancels only adjacent identical H, X, Z, or same-ordered CNOT pairs. It does not reorder instructions, optimize RZ, cross measurements, or compute circuit depth.
 - **Small state-vector simulation:** The simulator stores every basis-state amplitude, so its memory requirement grows as `2^n`. This is a textbook-correct and transparent approach for the small examples in this project, not a large-scale simulation strategy.
 - **Numeric parameter evaluation only:** Variables and arithmetic expressions are evaluated to `double` values during semantic checking. Symbolic algebra is intentionally not implemented because the current simulator requires concrete values for `RZ` angles.
 - **Measurement sampling without collapse:** Measurement calculates and samples probabilities but does not update the state vector after sampling. The provided sample programs measure at the end, which fits the current scope.
 
 These are engineering choices, not incomplete parser cases: the implemented language is intentionally a compact circuit description language with a complete lexer-to-simulator path.
+
+## 7. Fixed H₂ Energy Benchmark
+
+`qcompile_h2` evaluates neutral singlet H₂ at a 0.735 Å bond distance in the STO-3G minimal basis with two electrons. It uses Qiskit Nature's two-qubit parity mapping reduced with particle counts `(1, 1)`. The fixed electronic Hamiltonian, in Hartree, is:
+
+```text
+-1.05237325 I + 0.39793742 Z0 - 0.39793742 Z1
+-0.01128010 Z0 Z1 + 0.18093120 X0 X1
+```
+
+In QCompile's Pauli representation, an operator vector is indexed by qubit number and qubit zero is the least-significant state-vector bit. A Pauli expectation is calculated directly from the normalized complex state vector by applying its bit flips and phases; this path does not call or change the circuit language's `measure` operation.
+
+`QubitHamiltonian` stores weighted Pauli terms and evaluates their sum against a `Simulator`. `pauliExpectation` also accepts a state vector directly, validates its dimension, finite amplitudes, and unit norm, and supports I, X, Y, and Z products. The exact reference path independently constructs the fixed 4-by-4 matrix from the Pauli terms and uses Jacobi rotations to find its lowest eigenvalue.
+
+The one-parameter trial circuit prepares the encoded reference state, applies CNOT–RY–CNOT within the odd-parity two-state sector, and then returns to the encoded basis. RY is synthesized with the existing H and RZ gates. The golden-section search uses the bounded interval `[0, π/2]`, stops when its width is at most `1e-12` radians, and has a 128-iteration limit. The reported state is checked against the independent matrix minimum within `1e-10` Hartree.
+
+The rounded Hamiltonian's exact minimum is approximately `-1.857275029288` Hartree; the Qiskit Nature electronic-structure reference is `-1.857275030202` Hartree. Nuclear repulsion (`+0.719968994449` Hartree) is reported separately and added once for total Born–Oppenheimer energy. The coefficient-rounding difference is less than `1e-9` Hartree.
+
+Authoritative model and reference data: [Qiskit Nature electronic-structure tutorial](https://qiskit-community.github.io/qiskit-nature/tutorials/01_electronic_structure.html) and [qubit-mapping tutorial](https://qiskit-community.github.io/qiskit-nature/tutorials/06_qubit_mappers.html).
+
+## 8. Geometry-Generated H₂ Input
+
+The offline generator in `benchmarks/h2_geometry/generate_h2.py` accepts a bond length in Ångström and writes a versioned `QCOMPILE-H2-PAULI 1` Hamiltonian plus provenance JSON. It generates neutral singlet H₂ in STO-3G with RHF integrals, two spatial orbitals, no frozen orbitals, and Qiskit Nature `ParityMapper(num_particles=(1,1))`. The format records both Ångström and bohr distances, spin-orbital order, parity reduction, label endianness, Hartree units, the electronic-only Hamiltonian, and nuclear repulsion separately.
+
+```bash
+benchmarks/heh_plus/.venv-generator/bin/python -B \
+  benchmarks/h2_geometry/generate_h2.py \
+  --distance-angstrom 0.735 \
+  --output /tmp/h2-0735.qham
+
+make all
+./qcompile_benchmarks --generated-h2 /tmp/h2-0735.qham
+```
+
+`loadGeneratedH2` accepts only this H₂ schema and rejects unsupported model metadata, invalid dimensions, non-finite values, missing or duplicate terms, and trailing content. The two-qubit parity basis uses q0 as its least-significant bit. The generated reference solver diagonalizes the two-dimensional odd-parity block at indices 1 and 2, checks decoupling from the complementary block, and rejects imaginary or asymmetric projected matrices when the residual exceeds `1e-11 Ha`. `evaluateGeneratedH2Energy` runs the existing one-parameter H₂ circuit against the loaded `QubitHamiltonian`; it verifies that the state remains normalized and inside the physical block. The bounded golden-section optimizer uses `[0, π/2]`, a `1e-12` radian interval threshold, and a 128-iteration cap. It verifies its exact-sector result against the generated singlet-FCI reference and rejects a variational state that fails the `1e-8 Ha` energy criterion or undercuts the exact result by more than `1e-10 Ha`.
+
+The separate `qcompile_benchmarks --generated-h2 <file.qham>` path reports calculated electronic energy, physical-sector exact energy, generated FCI reference, variational error, nuclear repulsion, total energies, evaluation count, and convergence. Nuclear repulsion is added once and only when reporting total Born–Oppenheimer energy. The fixed catalog IDs and existing fixed H₂/HeH⁺ runners are unchanged. The offline generator and Psi4 validator are not C++ runtime dependencies; arbitrary molecules, bases, active spaces, and dashboard access are not supported.
+
+Fresh generator outputs at 0.735 Å and 1.400 Å were validated with a determinant matrix assembled from MO integrals and an independent Psi4 FCI run. Test fixtures exercise the C++ parser, while the acceptance workflow separately runs the C++ executable on freshly generated files. Provenance and full generator details are documented in `benchmarks/h2_geometry/README.md`.
+
+## 9. Fixed HeH⁺ Energy Benchmark
+
+`qcompile_heh` evaluates only the frozen HeH⁺ benchmark generated in `benchmarks/heh_plus/`: He at `(0,0,0)` and H at `(0,0,1.463283)` bohr, STO-3G, charge `+1`, two electrons, singlet `S=0`, two retained spatial orbitals and four Jordan–Wigner spin orbitals. The mapper has no symmetry reduction. Spin-orbital/qubit ordering is `q0=MO0 α`, `q1=MO1 α`, `q2=MO0 β`, `q3=MO1 β`; bit `q0` is least significant. Frozen Pauli labels in the reference JSON are printed `q3` through `q0`, so the C++ loader reverses the label into its per-qubit operator vector. The stored electronic Hamiltonian excludes nuclear repulsion.
+
+`hehHamiltonian` contains the 27 full-precision Pauli terms from `reference_data.json`. `hehSingletTrialCircuit(theta, phi)` starts in determinant index 5 and prepares
+
+```text
+cos(theta) |D0> + sin(theta) cos(phi) |S> + sin(theta) sin(phi) |D1>
+|S> = (|6> + |9>) / sqrt(2)
+```
+
+where `|D0>` is index 5 and `|D1>` is index 10 in q0-least-significant occupation-bit order. The circuit compiles two CSF-plane Givens rotations to existing X, CNOT, H, and RZ instructions. Each RY used in the decomposition is synthesized as `RZ(-π/2), H, RZ(angle), H, RZ(+π/2)`. No new DSL gate or measurement behavior is introduced. `Simulator::stateVector()` is a read-only reference used by validation code.
+
+`exactHeHSingletEnergy` constructs the 16-by-16 complex matrix from the Pauli terms, projects it onto the three singlet CSFs, and uses the shared dimension-checked Jacobi eigensolver. This excludes the Ms=0 triplet determinant combination. The variational optimizer uses a deterministic 3-by-4 grid of starting points, bounded coordinate-wise golden-section minimization, at most eight sweeps per start, 48 iterations per coordinate, `1e-8` radian interval stopping, and a 10,000 energy-evaluation ceiling. The reported state must lie within `1e-8` Ha of the exact singlet minimum and cannot undercut it by more than `1e-10` Ha. The exact energy is also required to agree with the independently validated Psi4 FCI reference within `1e-10` Ha.
+
+The external reference reports electronic FCI energy `−4.218264154490385` Ha, nuclear repulsion `+1.3667896093920315` Ha, and total Born–Oppenheimer energy `−2.8514745450983536` Ha. Nuclear repulsion is added only when producing total energy. Frozen generation settings, integrals, coefficient provenance, and matrix-equivalence checks are in `benchmarks/heh_plus/reference_data.json`; the independent Psi4 result and calculation log are retained alongside it. Python/Qiskit Nature/PySCF/Psi4 are offline reference-generation tools, not runtime or C++ build dependencies.
+
+This is an educational implementation of established Pauli-Hamiltonian, state-vector VQE-style optimization, and exact-diagonalization methods. The generated-H₂ path is restricted to the documented H₂/STO-3G/parity model. It does not provide arbitrary-molecule coverage, quantum advantage, or a novel algorithm.
+
+## 10. Fixed Benchmark Catalog and Matrix Input Contract
+
+`benchmarkCatalog`, `findBenchmark`, and `runBenchmark` provide a fixed C++17 catalog with stable IDs `h2` and `heh_plus`. `qcompile_benchmarks --list` lists the registered entries; passing either ID runs its existing molecule-specific optimizer and reports a common `BenchmarkResult`. `BenchmarkMetadata` records fixed geometry, charge, electron/spin/orbital/qubit counts, basis, mapping, ordering, exact-sector description, reference provenance, and energy conventions. The result keeps optimized parameters and count, electronic energy, nuclear repulsion, total energy, exact electronic energy, external reference energy, variational error, evaluation count, and convergence status. Catalog completion is marked converged only after the underlying optimizer returns successfully; optimizer failures propagate as errors. The separate `qcompile_h2` and `qcompile_heh` entry points and specialized calculation paths remain unchanged. The generated-H₂ file path is separate from the fixed catalog; it does not register arbitrary geometries or any additional molecule.
+
+`lowestSymmetricEigenvalue` accepts a compile-time-sized real matrix with dimension at least two. It rejects non-finite entries and rejects asymmetry when `|aᵢⱼ-aⱼᵢ| > 1e-12 × max(1, |aᵢⱼ|, |aⱼᵢ|)`. The scale floor keeps the contract well-defined for small matrix elements; the tolerance exceeds the observed double-precision symmetry residuals of the frozen matrices. The Jacobi rotation method and its `1e-14` off-diagonal convergence threshold are unchanged. A matrix that does not converge within the existing rotation limit still throws.
+
+## 11. Local Dashboard
+
+`node dashboard/server.js` serves a local dashboard at `http://127.0.0.1:4173`; build `qcompile_benchmarks` first with `make all`. The Node.js server uses built-in modules only, binds exclusively to loopback, serves the local frontend assets, and runs the existing C++ benchmark executable through `execFile` with an allowlist of `h2` and `heh_plus` IDs. It does not pass user-provided values to a shell.
+
+`qcompile_benchmarks --json-list` emits fixed catalog metadata, while `qcompile_benchmarks --json <benchmark-id>` emits one structured run result. The pre-existing `--list` and human-readable `<benchmark-id>` modes retain their output. The dashboard renders current process results, clears the prior result when a new run begins or fails, and shows electronic, exact-sector, documented reference, nuclear-repulsion, and total Born–Oppenheimer energies separately. Total energy is electronic plus nuclear repulsion exactly once. Missing numeric values are treated as unavailable rather than zero.
+
+The UI reuses the Tabler Core v1.4.0 component stylesheet under its MIT license, stored locally in `dashboard/vendor/`; it does not load a CDN or introduce an npm runtime dependency. The dashboard still exposes only the two fixed catalog models; the separate generated-H₂ CLI is not wired into the dashboard. No arbitrary-molecule generation, molecular visualization, or quantum-advantage claim is provided.
+
+## 12. Native H₂ Bonding Laboratory
+
+`make qcompile_lab` builds the separate native desktop target using the installed Qt 6 Widgets development package and `pkg-config`. `make all` continues to build the pre-existing compiler and benchmark executables without adding Qt to their dependency path. Its native header, dark workbench treatment, card grouping, and status hierarchy adapt the existing local Tabler Core v1.4.0 dashboard’s visual direction; the MIT-licensed CSS remains a web asset, not a native runtime dependency. The implementation uses Qt widgets and QPainter-projected 3D geometry; raylib and Dear ImGui are not installed in the inspected environment and are not required.
+
+Run `make all`, `make qcompile_lab`, then `./qcompile_lab`. The preview bond length is adjustable from 0.400 to 3.000 Å. The viewer distinguishes preview geometry from the latest completed calculation and supports mouse-drag rotation and wheel zoom. Nuclei and the bond are schematic representations, not classical trajectories or an electron-density model.
+
+Each calculation creates a private `QTemporaryDir`, invokes the existing offline Python generator with a `QProcess` argument list, then invokes `qcompile_benchmarks --generated-h2-json` with another argument list. The versioned JSON output is checked for schema, geometry, supported model metadata, finite values, convergence, and energy identities; the existing human-readable `--generated-h2` CLI mode is unchanged. No shell command string is constructed. Generator/solver failures, cancellation, malformed output, and stale request IDs do not become current results. Temporary Hamiltonians and sidecars are removed with the private directory.
+
+`h2TrialInstructions(parameter)` is the single gate-list source used by both H₂ energy evaluation and the circuit panel. Playback selects a gate prefix; the inspector constructs a fresh existing `Simulator`, executes that real prefix, and reads its actual `stateVector()`. It shows computational basis labels in `q1q0` order, amplitudes, probabilities `|amplitude|²`, and norm. This does not change sampling-only, non-collapsing DSL measurement semantics.
+
+The five-point sweep uses fresh generator/solver runs at 0.735, 0.900, 1.100, 1.250, and 1.400 Å. The plot displays only actual calculated total-energy points and corresponding physical-sector exact-reference points; it does not draw an interpolated curve. The guided prediction compares the two endpoint totals and identifies the minimum only among the sweep’s sampled geometries. The one-parameter ansatz is not claimed to remain accurate throughout dissociation.
+
+`./qcompile_lab --smoke-test` exercises camera rotation/zoom, bond preview updates, circuit stepping/play/pause, two individual geometry runs, and the five-point sweep, then saves a screenshot to `/tmp/qcompile-lab-smoke.png` without overwriting an existing file. Optional executable overrides are `QCOMPILE_LAB_PYTHON`, `QCOMPILE_LAB_GENERATOR`, and `QCOMPILE_LAB_BENCHMARKS`. The app adds no chemistry-package runtime dependency, web frontend, or support for molecules other than H₂.

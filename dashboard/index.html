@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en" data-bs-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="description" content="QCompile fixed molecular ground-state benchmarks">
+  <title>QCompile · Molecular benchmarks</title>
+  <link rel="stylesheet" href="/vendor/tabler.min.css">
+  <link rel="stylesheet" href="/app.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <div class="page">
+    <header class="navbar navbar-expand-md d-print-none" aria-label="QCompile header">
+      <div class="container-xl">
+        <a class="navbar-brand" href="/" aria-label="QCompile home">
+          <span class="brand-mark" aria-hidden="true">Q</span>
+          <span>QCompile</span>
+        </a>
+        <div class="navbar-nav flex-row order-md-last">
+          <span class="badge bg-azure-lt">STATE-VECTOR WORKBENCH</span>
+        </div>
+      </div>
+    </header>
+
+    <main class="page-wrapper">
+      <div class="container-xl">
+        <div class="page-header d-print-none">
+          <div class="row align-items-center">
+            <div class="col">
+              <div class="page-pretitle">Fixed molecular models · exact state-vector evaluation</div>
+              <h1 class="page-title">Ground-state energy</h1>
+              <div class="text-secondary mt-2">Run validated QCompile benchmarks and compare their variational result with an independent electronic reference.</div>
+            </div>
+            <div class="col-auto ms-auto d-print-none">
+              <span class="status-indicator status-green" aria-hidden="true"></span>
+              <span class="text-secondary small">Local calculation</span>
+            </div>
+          </div>
+        </div>
+
+        <section aria-labelledby="benchmarks-title" class="mb-4">
+          <div class="section-heading">
+            <div>
+              <h2 id="benchmarks-title" class="h3 mb-1">Choose a benchmark</h2>
+              <p class="text-secondary mb-0">Both models use frozen, documented Hamiltonians.</p>
+            </div>
+            <span id="catalog-status" class="text-secondary small" role="status" aria-live="polite">Loading benchmark catalog…</span>
+          </div>
+          <div id="benchmark-list" class="row row-cards mt-2" aria-live="polite"></div>
+        </section>
+
+        <section class="card results-card" aria-labelledby="results-title">
+          <div class="card-header">
+            <div class="w-100 d-flex align-items-center justify-content-between gap-3">
+              <div>
+                <h2 id="results-title" class="card-title mb-1">Calculation results</h2>
+                <div id="selected-model" class="text-secondary small">Select a fixed model to begin.</div>
+              </div>
+              <div class="d-flex align-items-center gap-2">
+                <span id="convergence-badge" class="badge bg-secondary-lt">Not run</span>
+                <button id="run-button" class="btn btn-primary" type="button" disabled>Run benchmark</button>
+              </div>
+            </div>
+          </div>
+          <div class="card-body">
+            <div id="run-message" class="run-message text-secondary" role="status" aria-live="polite">Choose H₂ or HeH⁺ above. Each run invokes the QCompile benchmark executable.</div>
+            <div id="results-content" hidden>
+              <div class="row row-cards metric-grid">
+                <div class="col-sm-6 col-lg-4"><div class="metric-card"><div class="text-secondary">Electronic energy</div><div id="electronic-energy" class="metric-value">—</div><div class="metric-unit">Hartree</div></div></div>
+                <div class="col-sm-6 col-lg-4"><div class="metric-card"><div class="text-secondary">Nuclear repulsion</div><div id="nuclear-energy" class="metric-value">—</div><div class="metric-unit">Hartree</div></div></div>
+                <div class="col-sm-6 col-lg-4"><div class="metric-card metric-card-accent"><div class="text-secondary">Total Born–Oppenheimer energy</div><div id="total-energy" class="metric-value">—</div><div class="metric-unit">Hartree · nuclei included once</div></div></div>
+                <div class="col-sm-6 col-lg-4"><div class="metric-card"><div class="text-secondary">Independent exact-sector energy</div><div id="exact-energy" class="metric-value">—</div><div class="metric-unit">Hartree · electronic</div></div></div>
+                <div class="col-sm-6 col-lg-4"><div class="metric-card"><div class="text-secondary">Documented reference energy</div><div id="reference-energy" class="metric-value">—</div><div class="metric-unit">Hartree · electronic</div></div></div>
+                <div class="col-sm-6 col-lg-4"><div class="metric-card"><div class="text-secondary">Variational error</div><div id="variational-error" class="metric-value">—</div><div class="metric-unit">Hartree · relative to exact sector</div></div></div>
+              </div>
+
+              <div class="row mt-4 g-4">
+                <div class="col-lg-7">
+                  <h3 class="h4">Energy comparison</h3>
+                  <div class="table-responsive">
+                    <table class="table table-vcenter">
+                      <thead><tr><th>Quantity</th><th class="text-end">Value</th><th>Convention</th></tr></thead>
+                      <tbody id="comparison-rows"></tbody>
+                    </table>
+                  </div>
+                </div>
+                <div class="col-lg-5">
+                  <h3 class="h4">Run details</h3>
+                  <dl class="run-details">
+                    <div><dt>Energy evaluations</dt><dd id="evaluation-count">—</dd></div>
+                    <div><dt>Optimized parameters</dt><dd id="optimized-parameters">—</dd></div>
+                    <div><dt>Convergence</dt><dd id="convergence-detail">—</dd></div>
+                  </dl>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="card explanation-card mt-4" aria-labelledby="model-note-title">
+          <div class="card-body">
+            <div class="row g-3 align-items-start">
+              <div class="col-auto"><span class="note-mark" aria-hidden="true">i</span></div>
+              <div class="col">
+                <h2 id="model-note-title" class="h3 mb-2">How to read this result</h2>
+                <p class="text-secondary mb-2">These are fixed educational benchmarks, not a general molecular-integral engine. Hamiltonians and physical-sector references are documented and frozen for each model.</p>
+                <p class="text-secondary mb-0">The electronic Hamiltonian excludes nuclear repulsion. Total Born–Oppenheimer energy is electronic energy plus the nuclear-repulsion constant, added exactly once. The simulator evaluates exact state-vector expectations; it does not use hardware shots.</p>
+              </div>
+            </div>
+          </div>
+        </section>
+        <footer class="page-footer mt-4 mb-4">
+          <div class="text-secondary small">QCompile · C++17 compiler and classical state-vector simulator · No quantum-advantage claim</div>
+        </footer>
+      </div>
+    </main>
+  </div>
+</body>
+</html>

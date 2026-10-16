@@ -1,2 +1,24 @@
 qcompile
 *.o
+
+# Local build outputs
+/qcompile_h2
+/qcompile_heh
+/qcompile_benchmarks
+/qcompile_lab
+/qcompile_tests
+
+# Local chemistry tool environments and caches
+/benchmarks/heh_plus/.conda*/
+/benchmarks/heh_plus/.micromamba*/
+/benchmarks/heh_plus/.venv*/
+/benchmarks/heh_plus/.pipx/
+/benchmarks/heh_plus/.uv-cache/
+/benchmarks/heh_plus/.python/
+/benchmarks/heh_plus/.diag-*/
+/benchmarks/heh_plus/.psi4-scratch*/
+
+# Local Python bytecode and timer outputs
+**/__pycache__/
+*.py[cod]
+timer.dat

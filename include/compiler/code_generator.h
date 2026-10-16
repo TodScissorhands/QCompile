@@ -1,8 +1,9 @@
 #pragma once
 
-#include "ast.h"
-#include "semantic_checker.h"
+#include "compiler/ast.h"
+#include "compiler/semantic_checker.h"
 
+#include <cstddef>
 #include <string>
 #include <vector>
 
@@ -21,3 +22,7 @@ std::vector<Instruction> generateInstructions(
 );
 
 void printInstructions(const std::vector<Instruction> &instructions);
+std::vector<Instruction> optimizeInstructions(
+    const std::vector<Instruction> &instructions,
+    std::size_t qubitCount
+);
