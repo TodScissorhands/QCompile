@@ -64,25 +64,46 @@ QSize CircuitView::minimumSizeHint() const {
   return QSize(460, 160);
 }
 
+bool CircuitView::exportPng(const QString &filePath, int scaleFactor) {
+  if (qubitCount_ <= 0 || instructions_.empty()) return false;
+  const QSize sz = sizeHint();
+  const int scale = std::max(1, scaleFactor);
+  const int w = sz.width() * scale;
+  const int h = sz.height() * scale;
+
+  QImage image(w, h, QImage::Format_ARGB32);
+  image.fill(QColor(11, 15, 23));
+
+  {
+    QPainter painter(&image);
+    painter.setRenderHint(QPainter::Antialiasing);
+    painter.scale(scale, scale);
+    paintCircuitContent(painter, sz.width(), sz.height());
+  }
+
+  return image.save(filePath);
+}
+
 void CircuitView::paintEvent(QPaintEvent *) {
   QPainter painter(this);
   painter.setRenderHint(QPainter::Antialiasing);
+  paintCircuitContent(painter, std::max(width(), sizeHint().width()), std::max(height(), sizeHint().height()));
+}
 
+void CircuitView::paintCircuitContent(QPainter &painter, int fullWidth, int fullHeight) {
   // Background
-  painter.fillRect(rect(), QColor(11, 15, 23));
+  painter.fillRect(0, 0, fullWidth, fullHeight, QColor(11, 15, 23));
 
   if (qubitCount_ <= 0) {
     painter.setPen(QColor(100, 116, 139));
     painter.setFont(QFont(QStringLiteral("Monospace"), 10));
-    painter.drawText(rect(), Qt::AlignCenter,
+    painter.drawText(QRect(0, 0, fullWidth, fullHeight), Qt::AlignCenter,
                      QStringLiteral("No quantum register declared (compile a circuit to visualize tracks)"));
     return;
   }
 
   // 1. Draw horizontal qubit wires and labels
   painter.setFont(QFont(QStringLiteral("Monospace"), 9, QFont::Bold));
-  const int fullWidth = std::max(width(), sizeHint().width());
-
   for (int q = 0; q < qubitCount_; ++q) {
     const int y = wireY(q);
 

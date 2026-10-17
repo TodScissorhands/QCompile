@@ -20,6 +20,7 @@ void testCapacity();
 void testCompilerFacade();
 void testSimulationSession();
 void testWorkbenchIntegration();
+void testExperimentBundle();
 } // namespace test
 int main() {
   try {
@@ -40,6 +41,7 @@ int main() {
     test::testCompilerFacade();
     test::testSimulationSession();
     test::testWorkbenchIntegration();
+    test::testExperimentBundle();
   } catch (const std::exception &error) {
     std::cerr << "FAIL after " << test::assertions << " assertions: " << error.what() << '\n';
     return 1;

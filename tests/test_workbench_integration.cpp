@@ -5,6 +5,8 @@
 #include "chemistry/heh_energy.h"
 #include "chemistry/vqe_convergence.h"
 #include <complex>
+#include <iomanip>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -232,7 +234,9 @@ void testWorkbenchIntegration() {
         }
         dsl += "\n";
       } else if (instr.gateName == "RZ") {
-        dsl += "RZ(" + std::to_string(instr.parameterValue) + ") q" + std::to_string(instr.qubitIndices[0]) + "\n";
+        std::ostringstream ss;
+        ss << std::setprecision(17) << instr.parameterValue;
+        dsl += "RZ(" + ss.str() + ") q" + std::to_string(instr.qubitIndices[0]) + "\n";
       } else if (instr.gateName == "CNOT") {
         dsl += "CNOT q" + std::to_string(instr.qubitIndices[0]) + ", q" + std::to_string(instr.qubitIndices[1]) + "\n";
       } else {
@@ -269,14 +273,34 @@ void testWorkbenchIntegration() {
     require(session.isComplete(), "session completed all steps");
     require(std::abs(session.stateNorm() - 1.0) < 1e-12, "final HeH+ state is normalized");
 
+    // Verify physical symmetry sector: statevector must reside strictly in singlet CSFs (basis 5, 6, 9, 10)
+    const auto &finalState = session.currentState();
+    for (std::size_t basis = 0; basis < finalState.size(); ++basis) {
+      if (basis != 5 && basis != 6 && basis != 9 && basis != 10) {
+        require(std::abs(finalState[basis]) < 1e-12,
+                "HeH+ state occupies strictly the 2-electron physical sector");
+      }
+    }
+    require(std::abs(finalState[6] - finalState[9]) < 1e-12,
+            "HeH+ state maintains zero-spin open-shell singlet symmetry (c6 == c9)");
+
     // Evaluate Pauli expectation against HeH+ Hamiltonian
-    double elEnergy = hehHamiltonian().expectation(session.currentState());
+    const double elEnergy = hehHamiltonian().expectation(finalState);
     require(std::abs(elEnergy - HEH_ELECTRONIC_REFERENCE_HARTREE) < 1e-8,
             "simulated HeH+ circuit energy matches exact FCI electronic reference (-4.218264 Ha)");
 
-    double totEnergy = elEnergy + HEH_NUCLEAR_REPULSION_HARTREE;
+    const double totEnergy = elEnergy + HEH_NUCLEAR_REPULSION_HARTREE;
     require(std::abs(totEnergy - HEH_TOTAL_REFERENCE_HARTREE) < 1e-8,
             "total energy matches Born-Oppenheimer reference (-2.851475 Ha)");
+
+    // Parameter sensitivity proof: verify non-optimal parameters raise energy strictly above minimum
+    const double hfEnergy = evaluateHeHEnergy(0.0, 0.0);
+    require(hfEnergy > elEnergy + 0.009,
+            "Hartree-Fock determinant (theta=0, phi=0) energy is strictly higher than optimal VQE minimum by ~9.63 mHa");
+
+    const double perturbedEnergy = evaluateHeHEnergy(optTheta + 0.1, optPhi);
+    require(perturbedEnergy > elEnergy + 0.001,
+            "Perturbed parameter energy is strictly higher than optimal VQE minimum");
   }
 
   // 7. Multi-molecule PES dataset, series definition, and bounds validation

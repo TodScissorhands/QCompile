@@ -5,7 +5,10 @@
 #include "simulator/simulation_session.h"
 #include "compiler/compiler_facade.h"
 #include "gui/circuit_view.h"
+#include "experiment/experiment_bundle.h"
 #include <QAbstractItemView>
+#include <QFileDialog>
+#include <QMessageBox>
 #include <QApplication>
 #include <QCheckBox>
 #include <QComboBox>
@@ -14,6 +17,7 @@
 #include <QTextBlock>
 #include <QTextCursor>
 #include <QButtonGroup>
+#include <QDateTime>
 #include <QDebug>
 #include <QDir>
 #include <QDoubleSpinBox>
@@ -1062,6 +1066,7 @@ private:
     mainTabs_ = new QTabWidget;
     mainTabs_->addTab(buildCircuitWorkbench(), QStringLiteral("⚛  Quantum Circuit Workbench"));
     mainTabs_->addTab(buildChemistryWorkbench(), QStringLiteral("🔬  Molecular PES Laboratory"));
+    mainTabs_->addTab(buildComparisonInspector(), QStringLiteral("📊  Comparison Inspector"));
     outer->addWidget(mainTabs_, 1);
 
     setCentralWidget(central);
@@ -1103,10 +1108,23 @@ private:
     optimizeCheck_ = new QCheckBox(QStringLiteral("Optimize Pass"));
     optimizeCheck_->setChecked(true);
 
+    saveExpBtn_ = new QPushButton(QStringLiteral("💾 Save"));
+    saveExpBtn_->setFixedHeight(26);
+    openExpBtn_ = new QPushButton(QStringLiteral("📂 Open"));
+    openExpBtn_->setFixedHeight(26);
+    exportSvgBtn_ = new QPushButton(QStringLiteral("⤓ SVG"));
+    exportSvgBtn_->setFixedHeight(26);
+    exportPngBtn_ = new QPushButton(QStringLiteral("⤓ PNG"));
+    exportPngBtn_->setFixedHeight(26);
+
     toolbar->addWidget(presetLabel);
     toolbar->addWidget(exampleCombo_, 1);
     toolbar->addWidget(compileBtn_);
     toolbar->addWidget(optimizeCheck_);
+    toolbar->addWidget(saveExpBtn_);
+    toolbar->addWidget(openExpBtn_);
+    toolbar->addWidget(exportSvgBtn_);
+    toolbar->addWidget(exportPngBtn_);
     leftLayout->addLayout(toolbar);
 
     // Status label
@@ -1273,6 +1291,10 @@ private:
         }
       }
     });
+    connect(saveExpBtn_, &QPushButton::clicked, [this] { saveCurrentExperiment(); });
+    connect(openExpBtn_, &QPushButton::clicked, [this] { openExperimentFile(); });
+    connect(exportSvgBtn_, &QPushButton::clicked, [this] { exportCircuitToSvgFile(); });
+    connect(exportPngBtn_, &QPushButton::clicked, [this] { exportCircuitToPngFile(); });
 
     dslDebounceTimer_.setSingleShot(true);
     dslDebounceTimer_.setInterval(350);
@@ -1584,9 +1606,13 @@ private:
     cancelVqeBtn_->setFixedHeight(28);
     cancelVqeBtn_->setEnabled(false);
 
+    exportCsvBtn_ = new QPushButton(QStringLiteral("⤓ Export CSV"));
+    exportCsvBtn_->setFixedHeight(28);
+
     vqeBtnRow->addWidget(liveH2VqeBtn_, 2);
     vqeBtnRow->addWidget(liveHeHVqeBtn_, 2);
     vqeBtnRow->addWidget(cancelVqeBtn_, 1);
+    vqeBtnRow->addWidget(exportCsvBtn_, 1);
     vqeCtrlLayout->addLayout(vqeBtnRow);
 
     vqeStatusLabel_ = new QLabel(QStringLiteral("Ready. Choose H₂ or HeH⁺ to stream live optimizer evaluations."));
@@ -1607,6 +1633,7 @@ private:
     connect(cancelVqeBtn_, &QPushButton::clicked, [this] {
       if (token_) token_->cancelled.store(true);
     });
+    connect(exportCsvBtn_, &QPushButton::clicked, [this] { exportConvergenceToCsvFile(); });
     columns->addWidget(rightTabs);
 
     columns->setStretchFactor(0, 11);
@@ -1614,6 +1641,369 @@ private:
 
     chemLayout->addWidget(columns, 1);
     return chemContainer;
+  }
+  QWidget *buildComparisonInspector() {
+    auto *compContainer = new QWidget;
+    auto *layout = new QVBoxLayout(compContainer);
+    layout->setContentsMargins(8, 8, 8, 8);
+    layout->setSpacing(8);
+
+    // Top control box
+    auto *ctrlBox = new QGroupBox(QStringLiteral("LOADED EXPERIMENT BUNDLES (.QCOMP)"));
+    auto *ctrlLayout = new QVBoxLayout(ctrlBox);
+    ctrlLayout->setSpacing(6);
+
+    auto *bar = new QHBoxLayout;
+    auto *addBtn = new QPushButton(QStringLiteral("＋ Add Experiment Bundle (.qcomp)"));
+    addBtn->setObjectName(QStringLiteral("primary"));
+    auto *clearBtn = new QPushButton(QStringLiteral("Clear List"));
+    auto *infoLabel = new QLabel(QStringLiteral("Load 2 or more .qcomp bundles to compare physical properties, energy deltas, and circuit metrics."));
+    infoLabel->setStyleSheet(QStringLiteral("color:#94a3b8;font-size:11px"));
+
+    bar->addWidget(addBtn);
+    bar->addWidget(clearBtn);
+    bar->addSpacing(12);
+    bar->addWidget(infoLabel, 1);
+    ctrlLayout->addLayout(bar);
+
+    comparisonListTable_ = new QTableWidget(0, 7);
+    comparisonListTable_->setHorizontalHeaderLabels({
+        QStringLiteral("ID / Title"),
+        QStringLiteral("Species"),
+        QStringLiteral("Qubits"),
+        QStringLiteral("Instructions"),
+        QStringLiteral("Geometry"),
+        QStringLiteral("Total Energy (Ha)"),
+        QStringLiteral("Evals")
+    });
+    comparisonListTable_->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
+    comparisonListTable_->horizontalHeader()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
+    comparisonListTable_->horizontalHeader()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
+    comparisonListTable_->horizontalHeader()->setSectionResizeMode(3, QHeaderView::ResizeToContents);
+    comparisonListTable_->horizontalHeader()->setSectionResizeMode(4, QHeaderView::ResizeToContents);
+    comparisonListTable_->horizontalHeader()->setSectionResizeMode(5, QHeaderView::ResizeToContents);
+    comparisonListTable_->horizontalHeader()->setSectionResizeMode(6, QHeaderView::ResizeToContents);
+    comparisonListTable_->verticalHeader()->hide();
+    comparisonListTable_->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    comparisonListTable_->setSelectionBehavior(QAbstractItemView::SelectRows);
+    comparisonListTable_->setFixedHeight(140);
+    ctrlLayout->addWidget(comparisonListTable_);
+
+    layout->addWidget(ctrlBox, 0);
+
+    // Bottom comparison result box
+    auto *diffBox = new QGroupBox(QStringLiteral("PAIRWISE DELTA & COMPATIBILITY ANALYSIS"));
+    auto *diffLayout = new QVBoxLayout(diffBox);
+    diffLayout->setSpacing(6);
+
+    comparisonSummaryLabel_ = new QLabel(QStringLiteral("Select two experiments in the list above to view scientific comparison."));
+    comparisonSummaryLabel_->setStyleSheet(QStringLiteral(
+        "font-family:monospace;font-size:11px;color:#38bdf8;padding:4px 8px;background:#0f172a;border:1px solid #1e293b;border-radius:2px"));
+    diffLayout->addWidget(comparisonSummaryLabel_);
+
+    comparisonDeltaTable_ = new QTableWidget(0, 6);
+    comparisonDeltaTable_->setHorizontalHeaderLabels({
+        QStringLiteral("Metric / Property"),
+        QStringLiteral("Experiment A"),
+        QStringLiteral("Experiment B"),
+        QStringLiteral("Difference (B − A)"),
+        QStringLiteral("Compatibility"),
+        QStringLiteral("Scientific Note")
+    });
+    comparisonDeltaTable_->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
+    comparisonDeltaTable_->horizontalHeader()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
+    comparisonDeltaTable_->horizontalHeader()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
+    comparisonDeltaTable_->horizontalHeader()->setSectionResizeMode(3, QHeaderView::ResizeToContents);
+    comparisonDeltaTable_->horizontalHeader()->setSectionResizeMode(4, QHeaderView::ResizeToContents);
+    comparisonDeltaTable_->horizontalHeader()->setSectionResizeMode(5, QHeaderView::Stretch);
+    comparisonDeltaTable_->verticalHeader()->hide();
+    comparisonDeltaTable_->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    comparisonDeltaTable_->setSelectionBehavior(QAbstractItemView::SelectRows);
+    diffLayout->addWidget(comparisonDeltaTable_, 1);
+
+    layout->addWidget(diffBox, 1);
+
+    connect(addBtn, &QPushButton::clicked, [this] {
+      const QString file = QFileDialog::getOpenFileName(this, QStringLiteral("Select Experiment Bundle"), QString(), QStringLiteral("QCompile Experiment (*.qcomp);;All Files (*)"));
+      if (!file.isEmpty()) addExperimentToComparison(file);
+    });
+
+    connect(clearBtn, &QPushButton::clicked, [this] {
+      comparisonBundles_.clear();
+      comparisonListTable_->setRowCount(0);
+      comparisonDeltaTable_->setRowCount(0);
+      comparisonSummaryLabel_->setText(QStringLiteral("Comparison list cleared. Add .qcomp bundles to compare."));
+    });
+
+    connect(comparisonListTable_, &QTableWidget::itemSelectionChanged, [this] {
+      updateComparisonView();
+    });
+
+    return compContainer;
+  }
+
+  bool saveCurrentExperiment(const QString &suggestedPath = QString()) {
+    QString path = suggestedPath;
+    if (path.isEmpty()) {
+      path = QFileDialog::getSaveFileName(
+          this, QStringLiteral("Save Experiment Bundle"),
+          QDir::currentPath() + QStringLiteral("/experiment.qcomp"),
+          QStringLiteral("QCompile Experiment (*.qcomp);;All Files (*)"));
+    }
+    if (path.isEmpty()) return false;
+
+    try {
+      ExperimentBundle b;
+      b.id = QStringLiteral("exp-%1").arg(QDateTime::currentMSecsSinceEpoch()).toStdString();
+      b.title = dslEditor_ ? dslEditor_->document()->firstBlock().text().trimmed().toStdString() : "Quantum Experiment";
+      b.timestamp = QDateTime::currentDateTimeUtc().toString(Qt::ISODate).toStdString();
+      b.description = "QCompile Qt6 workbench saved session";
+      b.dslSource = dslEditor_ ? dslEditor_->toPlainText().toStdString() : "";
+      b.optimize = optimizeCheck_ ? optimizeCheck_->isChecked() : true;
+      for (const auto &diag : lastCompilation_.diagnostics) {
+        b.diagnostics.push_back(diag.message);
+      }
+      b.qubitCount = circuitSession_ ? circuitSession_->qubitCount() : static_cast<int>(lastCompilation_.qubitCount);
+      b.rawInstructions = lastCompilation_.rawInstructions;
+      b.instructions = circuitSession_ ? circuitSession_->instructions() : lastCompilation_.instructions;
+
+      if (circuitSession_) {
+        b.currentStep = circuitSession_->currentStep();
+        b.totalSteps = circuitSession_->totalSteps();
+        b.isComplete = circuitSession_->isComplete();
+        b.stateNorm = circuitSession_->stateNorm();
+        b.statevector = circuitSession_->currentState();
+        b.basisProbabilities = circuitSession_->basisProbabilities();
+        for (std::size_t s = 1; s <= b.currentStep; ++s) {
+          auto res = circuitSession_->measurementResultAt(s);
+          if (res.has_value()) {
+            b.recordedMeasurements.emplace_back(s, *res);
+          }
+        }
+      }
+
+      if (latestResult_) {
+        b.hasChemistry = true;
+        b.moleculeName = "H2";
+        b.formula = "H2";
+        b.basis = "STO-3G";
+        b.mapping = "parity";
+        b.distance = latestResult_->distanceAngstrom;
+        b.distanceUnits = "Angstrom";
+        b.electronicEnergy = latestResult_->electronicEnergy;
+        b.nuclearRepulsion = latestResult_->nuclearRepulsionEnergy;
+        b.totalEnergy = latestResult_->totalEnergy;
+        b.exactElectronicEnergy = latestResult_->exactElectronicEnergy;
+        b.exactTotalEnergy = latestResult_->exactTotalEnergy;
+        b.variationalError = latestResult_->variationalError;
+        b.energyEvaluations = latestResult_->evaluations;
+        b.converged = latestResult_->converged;
+      }
+
+      if (convergencePlot_ && !convergencePlot_->points().empty()) {
+        b.hasConvergence = true;
+        b.convergenceTrajectory = convergencePlot_->points();
+      }
+
+      saveExperimentBundle(path.toStdString(), b);
+      compileStatusLabel_->setText(QStringLiteral("SAVED · %1").arg(QFileInfo(path).fileName()));
+      return true;
+    } catch (const std::exception &err) {
+      if (!smokeTest_) {
+        QMessageBox::critical(this, QStringLiteral("Save Error"), QString::fromStdString(err.what()));
+      }
+      return false;
+    }
+  }
+
+  bool openExperimentFile(const QString &specifiedPath = QString()) {
+    QString path = specifiedPath;
+    if (path.isEmpty()) {
+      path = QFileDialog::getOpenFileName(
+          this, QStringLiteral("Open Experiment Bundle"),
+          QDir::currentPath(),
+          QStringLiteral("QCompile Experiment (*.qcomp);;All Files (*)"));
+    }
+    if (path.isEmpty()) return false;
+
+    try {
+      const ExperimentBundle b = loadExperimentBundle(path.toStdString());
+      isCompiling_ = true;
+      if (dslEditor_) {
+        dslEditor_->setPlainText(QString::fromStdString(b.dslSource));
+      }
+      if (optimizeCheck_) {
+        optimizeCheck_->setChecked(b.optimize);
+      }
+      isCompiling_ = false;
+
+      compileDsl();
+
+      if (circuitSession_ && b.currentStep <= circuitSession_->totalSteps()) {
+        circuitSession_->seek(b.currentStep);
+        if (circuitStepSlider_) {
+          circuitStepSlider_->blockSignals(true);
+          circuitStepSlider_->setValue(static_cast<int>(b.currentStep));
+          circuitStepSlider_->blockSignals(false);
+        }
+        if (circuitView_) {
+          circuitView_->setCurrentStep(b.currentStep);
+        }
+        refreshCircuitStateInspection();
+      }
+
+      if (b.hasConvergence && convergencePlot_) {
+        const double ref = b.hasChemistry ? b.exactTotalEnergy : 0.0;
+        convergencePlot_->reset(ref, QString::fromStdString(b.formula.empty() ? b.moleculeName : b.formula));
+        for (const auto &pt : b.convergenceTrajectory) {
+          convergencePlot_->addPoint(pt);
+        }
+      }
+
+      compileStatusLabel_->setText(QStringLiteral("OPENED · %1").arg(QFileInfo(path).fileName()));
+      return true;
+    } catch (const std::exception &err) {
+      if (!smokeTest_) {
+        QMessageBox::critical(this, QStringLiteral("Open Error"), QString::fromStdString(err.what()));
+      }
+      return false;
+    }
+  }
+
+  bool exportCircuitToSvgFile(const QString &suggestedPath = QString()) {
+    QString path = suggestedPath;
+    if (path.isEmpty()) {
+      path = QFileDialog::getSaveFileName(
+          this, QStringLiteral("Export Circuit to SVG"),
+          QDir::currentPath() + QStringLiteral("/circuit.svg"),
+          QStringLiteral("Scalable Vector Graphics (*.svg);;All Files (*)"));
+    }
+    if (path.isEmpty()) return false;
+
+    try {
+      const auto &instrs = circuitSession_ ? circuitSession_->instructions() : lastCompilation_.instructions;
+      const int qCount = circuitSession_ ? circuitSession_->qubitCount() : static_cast<int>(lastCompilation_.qubitCount);
+      saveCircuitSvg(path.toStdString(), instrs, qCount);
+      return true;
+    } catch (const std::exception &err) {
+      if (!smokeTest_) QMessageBox::critical(this, QStringLiteral("Export Error"), QString::fromStdString(err.what()));
+      return false;
+    }
+  }
+
+  bool exportCircuitToPngFile(const QString &suggestedPath = QString()) {
+    QString path = suggestedPath;
+    if (path.isEmpty()) {
+      path = QFileDialog::getSaveFileName(
+          this, QStringLiteral("Export Circuit to PNG"),
+          QDir::currentPath() + QStringLiteral("/circuit.png"),
+          QStringLiteral("Portable Network Graphics (*.png);;All Files (*)"));
+    }
+    if (path.isEmpty()) return false;
+
+    if (!circuitView_) return false;
+    return circuitView_->exportPng(path, 2);
+  }
+
+  bool exportConvergenceToCsvFile(const QString &suggestedPath = QString()) {
+    QString path = suggestedPath;
+    if (path.isEmpty()) {
+      path = QFileDialog::getSaveFileName(
+          this, QStringLiteral("Export VQE Convergence to CSV"),
+          QDir::currentPath() + QStringLiteral("/convergence.csv"),
+          QStringLiteral("Comma-Separated Values (*.csv);;All Files (*)"));
+    }
+    if (path.isEmpty()) return false;
+
+    try {
+      ExperimentBundle b;
+      b.hasChemistry = (latestResult_.has_value());
+      b.nuclearRepulsion = latestResult_ ? latestResult_->nuclearRepulsionEnergy : 0.0;
+      b.hasConvergence = (convergencePlot_ && !convergencePlot_->points().empty());
+      if (convergencePlot_) {
+        b.convergenceTrajectory = convergencePlot_->points();
+      }
+      saveConvergenceCsv(path.toStdString(), b);
+      return true;
+    } catch (const std::exception &err) {
+      if (!smokeTest_) QMessageBox::critical(this, QStringLiteral("CSV Export Error"), QString::fromStdString(err.what()));
+      return false;
+    }
+  }
+
+  void addExperimentToComparison(const QString &path, const std::optional<ExperimentBundle> &preloaded = std::nullopt) {
+    try {
+      ExperimentBundle b = preloaded.has_value() ? *preloaded : loadExperimentBundle(path.toStdString());
+      comparisonBundles_.push_back(b);
+
+      const int row = comparisonListTable_->rowCount();
+      comparisonListTable_->insertRow(row);
+
+      const QString title = b.title.empty() ? QFileInfo(path).fileName() : QString::fromStdString(b.title);
+      comparisonListTable_->setItem(row, 0, new QTableWidgetItem(title));
+      comparisonListTable_->setItem(row, 1, new QTableWidgetItem(b.hasChemistry ? QString::fromStdString(b.formula) : QStringLiteral("Circuit")));
+      comparisonListTable_->setItem(row, 2, new QTableWidgetItem(QString::number(b.qubitCount)));
+      comparisonListTable_->setItem(row, 3, new QTableWidgetItem(QString::number(b.instructions.size())));
+      const QString geo = b.hasChemistry ? QStringLiteral("%1 %2").arg(b.distance, 0, 'f', 3).arg(QString::fromStdString(b.distanceUnits)) : QStringLiteral("—");
+      comparisonListTable_->setItem(row, 4, new QTableWidgetItem(geo));
+      const QString eStr = b.hasChemistry ? QString::number(b.totalEnergy, 'f', 6) : QStringLiteral("—");
+      comparisonListTable_->setItem(row, 5, new QTableWidgetItem(eStr));
+      const QString evStr = b.hasChemistry ? QString::number(b.energyEvaluations) : QStringLiteral("—");
+      comparisonListTable_->setItem(row, 6, new QTableWidgetItem(evStr));
+
+      if (comparisonBundles_.size() >= 2) {
+        updateComparisonView();
+      }
+    } catch (const std::exception &err) {
+      if (!smokeTest_) QMessageBox::warning(this, QStringLiteral("Load Error"), QString::fromStdString(err.what()));
+    }
+  }
+
+  void updateComparisonView() {
+    if (comparisonBundles_.size() < 2) {
+      comparisonDeltaTable_->setRowCount(0);
+      comparisonSummaryLabel_->setText(QStringLiteral("Load at least two experiments to view delta comparisons."));
+      return;
+    }
+
+    int idxA = 0;
+    int idxB = 1;
+    auto selectedRows = comparisonListTable_->selectionModel()->selectedRows();
+    if (selectedRows.size() >= 2) {
+      idxA = selectedRows[0].row();
+      idxB = selectedRows[1].row();
+    }
+
+    if (idxA < 0 || idxA >= static_cast<int>(comparisonBundles_.size()) ||
+        idxB < 0 || idxB >= static_cast<int>(comparisonBundles_.size())) {
+      return;
+    }
+
+    const auto comp = compareExperiments(comparisonBundles_[static_cast<std::size_t>(idxA)],
+                                         comparisonBundles_[static_cast<std::size_t>(idxB)]);
+
+    comparisonSummaryLabel_->setText(QString::fromStdString(comp.summary));
+    comparisonDeltaTable_->setRowCount(static_cast<int>(comp.items.size()));
+
+    for (std::size_t i = 0; i < comp.items.size(); ++i) {
+      const auto &item = comp.items[i];
+      const int r = static_cast<int>(i);
+
+      auto *propItem = new QTableWidgetItem(QString::fromStdString(item.propertyName));
+      auto *aItem = new QTableWidgetItem(QString::fromStdString(item.valueA));
+      auto *bItem = new QTableWidgetItem(QString::fromStdString(item.valueB));
+      auto *deltaItem = new QTableWidgetItem(QString::fromStdString(item.delta));
+      auto *compatItem = new QTableWidgetItem(item.isCompatible ? QStringLiteral("✓ Compatible") : QStringLiteral("⚠ Incompatible"));
+      compatItem->setForeground(item.isCompatible ? QColor(56, 189, 248) : QColor(244, 63, 94));
+      auto *noteItem = new QTableWidgetItem(QString::fromStdString(item.note));
+
+      comparisonDeltaTable_->setItem(r, 0, propItem);
+      comparisonDeltaTable_->setItem(r, 1, aItem);
+      comparisonDeltaTable_->setItem(r, 2, bItem);
+      comparisonDeltaTable_->setItem(r, 3, deltaItem);
+      comparisonDeltaTable_->setItem(r, 4, compatItem);
+      comparisonDeltaTable_->setItem(r, 5, noteItem);
+    }
   }
 
   QLabel *addValueRow(QFormLayout *layout, const QString &name) {
@@ -1725,7 +2115,7 @@ private:
         }
         text += QStringLiteral("\n");
       } else if (instr.gateName == "RZ") {
-        text += QStringLiteral("RZ(%1) q%2\n").arg(instr.parameterValue, 0, 'f', 9).arg(instr.qubitIndices[0]);
+        text += QStringLiteral("RZ(") + QString::number(instr.parameterValue, 'g', 17) + QStringLiteral(") q") + QString::number(instr.qubitIndices[0]) + QStringLiteral("\n");
       } else if (instr.gateName == "CNOT") {
         text += QStringLiteral("CNOT q%1, q%2\n").arg(instr.qubitIndices[0]).arg(instr.qubitIndices[1]);
       } else {
@@ -2436,6 +2826,35 @@ private:
       return;
     }
 
+    // 1b. Test Experiment Persistence & Export in Circuit Workbench
+    const QString smokeQcomp = QStringLiteral("/tmp/smoke_exp.qcomp");
+    const QString smokeSvg = QStringLiteral("/tmp/smoke_circ.svg");
+    const QString smokePng = QStringLiteral("/tmp/smoke_circ.png");
+    const QString smokeCsv = QStringLiteral("/tmp/smoke_conv.csv");
+    if (!saveCurrentExperiment(smokeQcomp) || !QFileInfo::exists(smokeQcomp)) {
+      finishSmokeTest(false, QStringLiteral("saveCurrentExperiment failed to write .qcomp file"));
+      return;
+    }
+    if (!openExperimentFile(smokeQcomp)) {
+      finishSmokeTest(false, QStringLiteral("openExperimentFile failed to load .qcomp file"));
+      return;
+    }
+    if (!exportCircuitToSvgFile(smokeSvg) || !QFileInfo::exists(smokeSvg)) {
+      finishSmokeTest(false, QStringLiteral("exportCircuitToSvgFile failed to write SVG"));
+      return;
+    }
+    if (!exportCircuitToPngFile(smokePng) || !QFileInfo::exists(smokePng)) {
+      finishSmokeTest(false, QStringLiteral("exportCircuitToPngFile failed to write PNG"));
+      return;
+    }
+    if (!exportConvergenceToCsvFile(smokeCsv) || !QFileInfo::exists(smokeCsv)) {
+      finishSmokeTest(false, QStringLiteral("exportConvergenceToCsvFile failed to write CSV"));
+      return;
+    }
+    QFile::remove(smokeSvg);
+    QFile::remove(smokePng);
+    QFile::remove(smokeCsv);
+
     // 1b. Test HeH+ 4-qubit circuit preset in Circuit Workbench
     exampleCombo_->setCurrentIndex(4);
     if (!dslEditor_->toPlainText().contains(QStringLiteral("qubit q0, q1, q2, q3"))) {
@@ -2477,6 +2896,19 @@ private:
         return;
       }
       pesViewCombo_->setCurrentIndex(1); // H2 scan
+    }
+
+    // 2b. Test Comparison Inspector Tab
+    if (mainTabs_ && comparisonListTable_ && comparisonDeltaTable_) {
+      mainTabs_->setCurrentIndex(2);
+      addExperimentToComparison(smokeQcomp);
+      addExperimentToComparison(smokeQcomp);
+      if (comparisonListTable_->rowCount() < 2 || comparisonDeltaTable_->rowCount() == 0) {
+        finishSmokeTest(false, QStringLiteral("comparison inspector did not generate pairwise comparison rows"));
+        return;
+      }
+      QFile::remove(smokeQcomp);
+      mainTabs_->setCurrentIndex(1);
     }
     const double initialYaw = moleculeView_->yaw();
     const QPoint pressPosition(40, 40);
@@ -2670,6 +3102,17 @@ private:
   compiler::CompilationResult lastCompilation_;
   std::unique_ptr<SimulationSession> circuitSession_;
   bool isCompiling_ = false;
+
+  // Milestone 4: Persistence, Comparison & Export
+  QPushButton *saveExpBtn_ = nullptr;
+  QPushButton *openExpBtn_ = nullptr;
+  QPushButton *exportSvgBtn_ = nullptr;
+  QPushButton *exportPngBtn_ = nullptr;
+  QPushButton *exportCsvBtn_ = nullptr;
+  QTableWidget *comparisonListTable_ = nullptr;
+  QTableWidget *comparisonDeltaTable_ = nullptr;
+  QLabel *comparisonSummaryLabel_ = nullptr;
+  std::vector<ExperimentBundle> comparisonBundles_;
 };
 
 } // namespace

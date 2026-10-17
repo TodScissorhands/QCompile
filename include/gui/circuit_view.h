@@ -3,8 +3,11 @@
 #include "compiler/code_generator.h"
 
 #include <QWidget>
+#include <QString>
 #include <cstddef>
 #include <vector>
+
+class QPainter;
 
 class CircuitView : public QWidget {
 
@@ -17,10 +20,11 @@ public:
   int qubitCount() const { return qubitCount_; }
   std::size_t currentStep() const { return currentStep_; }
   std::size_t instructionCount() const { return instructions_.size(); }
+  bool exportPng(const QString &filePath, int scaleFactor = 2);
+  void paintCircuitContent(QPainter &painter, int fullWidth, int fullHeight);
 
   QSize sizeHint() const override;
   QSize minimumSizeHint() const override;
-
 protected:
   void paintEvent(QPaintEvent *event) override;
 
