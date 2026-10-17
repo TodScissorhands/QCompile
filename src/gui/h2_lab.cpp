@@ -1,6 +1,6 @@
 #include "chemistry/h2_energy.h"
 #include "simulator/simulator.h"
-
+#include "simulator/simulation_session.h"
 #include <QAbstractItemView>
 #include <QApplication>
 #include <QButtonGroup>
@@ -1115,12 +1115,10 @@ private:
     const double parameter = latestResult_ ? latestResult_->parameter : 0.0;
     const auto instructions = h2TrialInstructions(parameter);
     const int completed = stepSlider_->value();
-    std::vector<Instruction> prefix(instructions.begin(), instructions.begin() + completed);
-    Simulator simulator(2);
-    simulator.run(prefix);
-    const auto &state = simulator.stateVector();
-    double norm = 0.0;
-    for (const auto &amplitude : state) norm += std::norm(amplitude);
+    SimulationSession session(instructions, 2);
+    session.seek(static_cast<std::size_t>(completed));
+    const auto &state = session.currentState();
+    const double norm = session.stateNorm();
     stateStageLabel_->setText(
         completed == 0 ? QStringLiteral("Selected stage: initial |q1q0⟩ = |00⟩ basis state before gate 1")
                        : QStringLiteral("Selected stage: after gate %1 of %2")

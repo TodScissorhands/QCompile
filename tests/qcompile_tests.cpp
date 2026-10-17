@@ -17,8 +17,9 @@ void testInstructionOptimization();
 void testCodeGeneration();
 void testSimulator();
 void testCapacity();
+void testCompilerFacade();
+void testSimulationSession();
 } // namespace test
-
 int main() {
   try {
     test::testPauliExpectations();
@@ -35,6 +36,8 @@ int main() {
     test::testCodeGeneration();
     test::testSimulator();
     test::testCapacity();
+    test::testCompilerFacade();
+    test::testSimulationSession();
   } catch (const std::exception &error) {
     std::cerr << "FAIL after " << test::assertions << " assertions: " << error.what() << '\n';
     return 1;

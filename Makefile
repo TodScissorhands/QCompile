@@ -32,12 +32,12 @@ LAB_TARGET = qcompile_lab
 TEST_TARGET = qcompile_tests
 
 # Source lists.
-SOURCES = src/apps/main.cpp src/compiler/lexer.cpp src/compiler/parser.cpp src/compiler/semantic_checker.cpp src/compiler/code_generator.cpp src/simulator/simulator.cpp src/chemistry/hamiltonian.cpp src/chemistry/h2_energy.cpp
+SOURCES = src/apps/main.cpp src/compiler/lexer.cpp src/compiler/parser.cpp src/compiler/semantic_checker.cpp src/compiler/code_generator.cpp src/compiler/compiler_facade.cpp src/simulator/simulator.cpp src/simulator/simulation_session.cpp src/chemistry/hamiltonian.cpp src/chemistry/h2_energy.cpp
 H2_SOURCES = src/apps/h2_main.cpp src/simulator/simulator.cpp src/chemistry/hamiltonian.cpp src/chemistry/h2_energy.cpp
 HEH_SOURCES = src/apps/heh_main.cpp src/simulator/simulator.cpp src/chemistry/hamiltonian.cpp src/chemistry/heh_energy.cpp
 BENCHMARK_SOURCES = src/apps/benchmark_main.cpp src/chemistry/benchmark_catalog.cpp src/chemistry/h2_energy.cpp src/chemistry/h2_geometry.cpp src/chemistry/heh_energy.cpp src/simulator/simulator.cpp src/chemistry/hamiltonian.cpp
-LAB_SOURCES = src/gui/h2_lab.cpp src/simulator/simulator.cpp src/chemistry/hamiltonian.cpp src/chemistry/h2_energy.cpp src/chemistry/h2_geometry.cpp
-TEST_SOURCES = tests/qcompile_tests.cpp tests/test_support.cpp tests/test_lexer.cpp tests/test_parser.cpp tests/test_semantics.cpp tests/test_optimizer.cpp tests/test_simulator.cpp tests/test_chemistry.cpp src/compiler/lexer.cpp src/compiler/parser.cpp src/compiler/semantic_checker.cpp src/compiler/code_generator.cpp src/simulator/simulator.cpp src/chemistry/hamiltonian.cpp src/chemistry/h2_energy.cpp src/chemistry/h2_geometry.cpp src/chemistry/heh_energy.cpp src/chemistry/benchmark_catalog.cpp
+LAB_SOURCES = src/gui/h2_lab.cpp src/simulator/simulator.cpp src/simulator/simulation_session.cpp src/chemistry/hamiltonian.cpp src/chemistry/h2_energy.cpp src/chemistry/h2_geometry.cpp
+TEST_SOURCES = tests/qcompile_tests.cpp tests/test_support.cpp tests/test_lexer.cpp tests/test_parser.cpp tests/test_semantics.cpp tests/test_optimizer.cpp tests/test_simulator.cpp tests/test_chemistry.cpp tests/test_compiler_facade.cpp tests/test_simulation_session.cpp src/compiler/lexer.cpp src/compiler/parser.cpp src/compiler/semantic_checker.cpp src/compiler/code_generator.cpp src/compiler/compiler_facade.cpp src/simulator/simulator.cpp src/simulator/simulation_session.cpp src/chemistry/hamiltonian.cpp src/chemistry/h2_energy.cpp src/chemistry/h2_geometry.cpp src/chemistry/heh_energy.cpp src/chemistry/benchmark_catalog.cpp
 
 # Map source files to object files in BUILD_DIR.
 OBJECTS = $(patsubst %.cpp,$(BUILD_DIR)/%.o,$(SOURCES))

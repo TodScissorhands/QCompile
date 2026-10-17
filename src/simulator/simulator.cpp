@@ -74,20 +74,26 @@ std::string Simulator::bitString(std::size_t stateIndex) const {
   return result;
 }
 
-void Simulator::measure(const std::vector<int> &measuredQubits) {
+StepResult Simulator::measure(
+    const std::vector<int> &measuredQubits,
+    std::optional<std::size_t> fixedOutcome,
+    bool printOutput
+) {
   // 1. Calculate and display pre-measurement probability distribution of the full register
-  std::cout << "\nPre-measurement probabilities:\n";
-  for (std::size_t i = 0; i < state.size(); i = i + 1) {
-    double probability = std::norm(state[i]);
-    if (probability > 0.000001) {
-      std::cout << "  " << bitString(i) << ": " << std::fixed
-                << std::setprecision(6) << probability << "\n";
+  if (printOutput) {
+    std::cout << "\nPre-measurement probabilities:\n";
+    for (std::size_t i = 0; i < state.size(); i = i + 1) {
+      double probability = std::norm(state[i]);
+      if (probability > 0.000001) {
+        std::cout << "  " << bitString(i) << ": " << std::fixed
+                  << std::setprecision(6) << probability << "\n";
+      }
     }
   }
 
   // If no qubits are specified, measurement is a no-op
   if (measuredQubits.empty()) {
-    return;
+    return {std::nullopt, ""};
   }
 
   // 2. Compute joint outcome distribution over the 2^k subspace of the measured qubits
@@ -107,13 +113,21 @@ void Simulator::measure(const std::vector<int> &measuredQubits) {
     jointProbabilities[outcomeIndex] += std::norm(state[i]);
   }
 
-  // 3. Sample the joint outcome
-  std::discrete_distribution<int> distribution(
-      jointProbabilities.begin(),
-      jointProbabilities.end()
-  );
-  const int sampled = distribution(randomGenerator);
-  const std::size_t sampledOutcome = static_cast<std::size_t>(sampled);
+  // 3. Sample the joint outcome or use fixed historical outcome
+  std::size_t sampledOutcome = 0;
+  if (fixedOutcome.has_value()) {
+    sampledOutcome = *fixedOutcome;
+    if (sampledOutcome >= numOutcomes) {
+      throw std::invalid_argument("Fixed measurement outcome out of range");
+    }
+  } else {
+    std::discrete_distribution<int> distribution(
+        jointProbabilities.begin(),
+        jointProbabilities.end()
+    );
+    const int sampled = distribution(randomGenerator);
+    sampledOutcome = static_cast<std::size_t>(sampled);
+  }
   const double outcomeProb = jointProbabilities[sampledOutcome];
 
   // 4. Construct measured result string in operand order
@@ -146,85 +160,112 @@ void Simulator::measure(const std::vector<int> &measuredQubits) {
     }
   }
 
-  std::cout << "Result: " << measuredResult << "\n";
+  if (printOutput) {
+    std::cout << "Result: " << measuredResult << "\n";
+  }
+
+  return {sampledOutcome, measuredResult};
+}
+
+StepResult Simulator::applyInstruction(
+    const Instruction &instruction,
+    std::optional<std::size_t> fixedOutcome,
+    bool printOutput
+) {
+  if (instruction.type != InstructionType::ApplyGate &&
+      instruction.type != InstructionType::Measure) {
+    throw std::invalid_argument("Unsupported instruction type");
+  }
+
+  if (instruction.type == InstructionType::ApplyGate) {
+    const bool singleQubitGate =
+        instruction.gateName == "H" || instruction.gateName == "X" ||
+        instruction.gateName == "Z" || instruction.gateName == "RZ";
+    const bool cnotGate = instruction.gateName == "CNOT";
+    if (!singleQubitGate && !cnotGate) {
+      throw std::invalid_argument("Unsupported gate instruction");
+    }
+    if ((singleQubitGate && instruction.qubitIndices.size() != 1) ||
+        (cnotGate && instruction.qubitIndices.size() != 2)) {
+      throw std::invalid_argument("Instruction has an invalid qubit count");
+    }
+  }
+
+  for (std::size_t j = 0; j < instruction.qubitIndices.size(); j = j + 1) {
+    const int qubit = instruction.qubitIndices[j];
+    if (qubit < 0 || qubit >= qubitCount) {
+      throw std::invalid_argument("Instruction qubit index out of range");
+    }
+  }
+
+  if (instruction.type == InstructionType::Measure) {
+    return measure(instruction.qubitIndices, fixedOutcome, printOutput);
+  }
+
+  const double inverseSquareRootOfTwo = 1.0 / std::sqrt(2.0);
+  if (instruction.gateName == "H") {
+    applySingleQubitGate(
+        instruction.qubitIndices[0],
+        inverseSquareRootOfTwo,
+        inverseSquareRootOfTwo,
+        inverseSquareRootOfTwo,
+        -inverseSquareRootOfTwo
+    );
+  } else if (instruction.gateName == "X") {
+    applySingleQubitGate(
+        instruction.qubitIndices[0],
+        0.0,
+        1.0,
+        1.0,
+        0.0
+    );
+  } else if (instruction.gateName == "Z") {
+    applySingleQubitGate(
+        instruction.qubitIndices[0],
+        1.0,
+        0.0,
+        0.0,
+        -1.0
+    );
+  } else if (instruction.gateName == "RZ") {
+    double halfAngle = instruction.parameterValue / 2.0;
+    std::complex<double> zeroPhase(
+        std::cos(-halfAngle),
+        std::sin(-halfAngle)
+    );
+    std::complex<double> onePhase(std::cos(halfAngle), std::sin(halfAngle));
+    applySingleQubitGate(
+        instruction.qubitIndices[0],
+        zeroPhase,
+        0.0,
+        0.0,
+        onePhase
+    );
+  } else if (instruction.gateName == "CNOT") {
+    applyCNOT(instruction.qubitIndices[0], instruction.qubitIndices[1]);
+  }
+
+  return {std::nullopt, ""};
 }
 
 void Simulator::run(const std::vector<Instruction> &instructions) {
-  double inverseSquareRootOfTwo = 1.0 / std::sqrt(2.0);
-
   for (int i = 0; i < static_cast<int>(instructions.size()); i = i + 1) {
-    const Instruction &instruction = instructions[i];
-
-    if (instruction.type != InstructionType::ApplyGate &&
-        instruction.type != InstructionType::Measure) {
-      throw std::invalid_argument("Unsupported instruction type");
-    }
-
-    if (instruction.type == InstructionType::ApplyGate) {
-      const bool singleQubitGate =
-          instruction.gateName == "H" || instruction.gateName == "X" ||
-          instruction.gateName == "Z" || instruction.gateName == "RZ";
-      const bool cnotGate = instruction.gateName == "CNOT";
-      if (!singleQubitGate && !cnotGate) {
-        throw std::invalid_argument("Unsupported gate instruction");
-      }
-      if ((singleQubitGate && instruction.qubitIndices.size() != 1) ||
-          (cnotGate && instruction.qubitIndices.size() != 2)) {
-        throw std::invalid_argument("Instruction has an invalid qubit count");
-      }
-    }
-
-    for (std::size_t j = 0; j < instruction.qubitIndices.size(); j = j + 1) {
-      const int qubit = instruction.qubitIndices[j];
-      if (qubit < 0 || qubit >= qubitCount) {
-        throw std::invalid_argument("Instruction qubit index out of range");
-      }
-    }
-
-    if (instruction.type == InstructionType::Measure) {
-      measure(instruction.qubitIndices);
-    } else if (instruction.gateName == "H") {
-      applySingleQubitGate(
-          instruction.qubitIndices[0],
-          inverseSquareRootOfTwo,
-          inverseSquareRootOfTwo,
-          inverseSquareRootOfTwo,
-          -inverseSquareRootOfTwo
-      );
-    } else if (instruction.gateName == "X") {
-      applySingleQubitGate(
-          instruction.qubitIndices[0],
-          0.0,
-          1.0,
-          1.0,
-          0.0
-      );
-    } else if (instruction.gateName == "Z") {
-      applySingleQubitGate(
-          instruction.qubitIndices[0],
-          1.0,
-          0.0,
-          0.0,
-          -1.0
-      );
-    } else if (instruction.gateName == "RZ") {
-      double halfAngle = instruction.parameterValue / 2.0;
-      std::complex<double> zeroPhase(
-          std::cos(-halfAngle),
-          std::sin(-halfAngle)
-      );
-      std::complex<double> onePhase(std::cos(halfAngle), std::sin(halfAngle));
-      applySingleQubitGate(
-          instruction.qubitIndices[0],
-          zeroPhase,
-          0.0,
-          0.0,
-          onePhase
-      );
-    } else if (instruction.gateName == "CNOT") {
-      applyCNOT(instruction.qubitIndices[0], instruction.qubitIndices[1]);
-    }
+    applyInstruction(instructions[i], std::nullopt, /*printOutput=*/true);
   }
+}
+
+void Simulator::setStateVector(const std::vector<std::complex<double>> &newState) {
+  const std::size_t expectedSize = std::size_t{1} << static_cast<unsigned int>(qubitCount);
+  if (newState.size() != expectedSize) {
+    throw std::invalid_argument(
+        "State vector dimension does not match simulator qubit count"
+    );
+  }
+  state = newState;
+}
+
+int Simulator::getQubitCount() const {
+  return qubitCount;
 }
 
 const std::vector<std::complex<double>> &Simulator::stateVector() const {
