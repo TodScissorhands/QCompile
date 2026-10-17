@@ -12,7 +12,8 @@ void printUsage() {
   std::cerr << "Usage: ./qcompile_benchmarks --list | --json-list | "
                "[--json] <benchmark-id> | --generated-h2 <file.qham> | "
                "--generated-h2-json <file.qham> | --engine-h2 <dist_angstrom> | "
-               "--engine-h2-json <dist_angstrom>\n";
+               "--engine-h2-json <dist_angstrom> | --engine-lih [dist_angstrom] | "
+               "--engine-lih-json [dist_angstrom]\n";
 }
 
 void printJsonString(std::string_view value) {
@@ -198,9 +199,61 @@ int runEngineH2(double distance, bool jsonOutput) {
   }
 }
 
+int runEngineLiH(double distance, bool jsonOutput) {
+  try {
+    if (distance < 0.8 || distance > 4.0) {
+      throw std::invalid_argument("LiH bond distance must be in [0.8, 4.0] Angstrom");
+    }
+    MolecularGeometry geom;
+    geom.atoms = {{"Li", 3, {0.0, 0.0, 0.0}}, {"H", 1, {0.0, 0.0, distance}}};
+    geom.unit = GeometryUnit::Angstrom;
+    ActiveSpaceConfig actConfig{1, 2}; // 1 core orbital (Li 1s), 2 active orbitals (4 qubits)
+    const auto gen = buildMolecularHamiltonian(geom, MappingType::JordanWigner, actConfig);
+
+    if (jsonOutput) {
+      std::cout << "{\n"
+                << "  \"benchmark\": \"engine_lih\",\n"
+                << "  \"formula\": \"LiH\",\n"
+                << "  \"distance_angstrom\": " << std::setprecision(17) << distance << ",\n"
+                << "  \"nuclear_repulsion_hartree\": " << gen.nuclearRepulsion << ",\n"
+                << "  \"core_energy_hartree\": " << gen.coreEnergy << ",\n"
+                << "  \"rhf_total_energy_hartree\": " << gen.rhfTotalEnergy << ",\n"
+                << "  \"active_fci_electronic_energy_hartree\": " << gen.fciExactElectronicEnergy << ",\n"
+                << "  \"active_fci_total_energy_hartree\": " << gen.fciExactTotalEnergy << ",\n"
+                << "  \"qubits\": " << gen.qubitCount << "\n"
+                << "}\n";
+    } else {
+      std::cout << "Generated LiH geometry-driven benchmark\n"
+                << "Geometry: LiH, R = " << std::setprecision(15) << distance << " Angstrom\n"
+                << "Model: neutral singlet, 4 electrons (2 core frozen, 2 active in 2 MOs), STO-3G, Jordan-Wigner, 4 qubits\n"
+                << "Nuclear repulsion: " << std::setprecision(15) << gen.nuclearRepulsion << " Hartree\n"
+                << "Frozen core scalar (E_core): " << gen.coreEnergy << " Hartree\n"
+                << "RHF total energy: " << gen.rhfTotalEnergy << " Hartree\n"
+                << "Active space FCI correlation energy (E_CI): " << gen.fciExactElectronicEnergy << " Hartree\n"
+                << "Active space exact total energy (E_core + E_CI): " << gen.fciExactTotalEnergy << " Hartree\n";
+    }
+    return 0;
+  } catch (const std::exception &error) {
+    std::cerr << error.what() << '\n';
+    return 1;
+  }
+}
+
 } // namespace
 
 int main(int argc, char *argv[]) {
+  if (argc == 2 && std::string_view(argv[1]) == "--engine-lih") {
+    return runEngineLiH(1.595, false);
+  }
+  if (argc == 3 && std::string_view(argv[1]) == "--engine-lih") {
+    return runEngineLiH(std::stod(argv[2]), false);
+  }
+  if (argc == 2 && std::string_view(argv[1]) == "--engine-lih-json") {
+    return runEngineLiH(1.595, true);
+  }
+  if (argc == 3 && std::string_view(argv[1]) == "--engine-lih-json") {
+    return runEngineLiH(std::stod(argv[2]), true);
+  }
   if (argc == 3 && std::string_view(argv[1]) == "--engine-h2") {
     return runEngineH2(std::stod(argv[2]), false);
   }

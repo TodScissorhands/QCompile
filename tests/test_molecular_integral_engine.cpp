@@ -383,6 +383,85 @@ void testMolecularIntegralEngine() {
     require(std::abs(hehGen.rhfTotalEnergy - (hehGen.rhfTotalEnergy)) < 1e-14,
             "RHF total energy is self-consistent");
   }
+
+  // 10. LiH STO-3G p-Orbitals, Generalized RHF, and Frozen-Core Active Space (Milestone 8)
+  {
+    MolecularGeometry lihGeom;
+    lihGeom.atoms = {{"Li", 3, {0.0, 0.0, 0.0}}, {"H", 1, {0.0, 0.0, 1.595}}};
+    lihGeom.unit = GeometryUnit::Angstrom;
+    lihGeom.charge = 0;
+    lihGeom.multiplicity = 1;
+
+    // 10a. Validate Basis Construction & Nuclear Repulsion
+    const auto basis = buildSto3gBasis(lihGeom);
+    require(basis.basisFunctions.size() == 6, "LiH STO-3G has exactly 6 basis functions (Li 1s, 2s, 2px, 2py, 2pz, H 1s)");
+    require(basis.basisFunctions[2].angularMomentum == 1 && basis.basisFunctions[2].lx == 1, "AO 2 is Li 2px");
+    require(basis.basisFunctions[3].angularMomentum == 1 && basis.basisFunctions[3].ly == 1, "AO 3 is Li 2py");
+    require(basis.basisFunctions[4].angularMomentum == 1 && basis.basisFunctions[4].lz == 1, "AO 4 is Li 2pz");
+
+    const double eNuc = lihGeom.nuclearRepulsionEnergy();
+    require(std::abs(eNuc - 0.9953176380940441) < 1e-12, "LiH nuclear repulsion matches Coulomb reference 0.995317638094 Ha");
+
+    // 10b. Compute Molecular Integrals and Validate S, T, V, ERI Symmetries
+    const auto integrals = computeMolecularIntegrals(lihGeom);
+    require(integrals.nao == 6, "integrals.nao is 6 for LiH");
+
+    // Diagonal overlap is 1.0
+    for (int i = 0; i < 6; ++i) {
+      require(std::abs(integrals.getOverlap(i, i) - 1.0) < 1e-12, "AO diagonal self-overlap is 1.0");
+    }
+
+    // Axial symmetry along z-axis: Li 2px and 2py have zero overlap with H 1s
+    require(std::abs(integrals.getOverlap(2, 5)) < 1e-12, "S(Li_2px, H_1s) is strictly zero by axial symmetry");
+    require(std::abs(integrals.getOverlap(3, 5)) < 1e-12, "S(Li_2py, H_1s) is strictly zero by axial symmetry");
+
+    // Degeneracy of px and py diagonal kinetic energy
+    require(std::abs(integrals.getKinetic(2, 2) - integrals.getKinetic(3, 3)) < 1e-12,
+            "T(Li_2px, Li_2px) == T(Li_2py, Li_2py) by degeneracy");
+
+    // 10c. Generalized RHF SCF Convergence & Energies
+    const auto rhf = computeRhfScf(lihGeom, integrals);
+    require(rhf.converged, "LiH RHF SCF converges cleanly");
+    require(rhf.nElectrons == 4, "LiH has 4 electrons");
+    require(rhf.nOccupied == 2, "LiH has 2 occupied spatial orbitals");
+    require(rhf.nOrbitals == 6, "LiH has 6 molecular orbitals");
+
+    // Match PySCF 2.8.0 RHF ground-state reference
+    require(std::abs(rhf.electronicEnergy - (-8.85734149822116)) < 1e-7,
+            "LiH RHF electronic energy matches PySCF reference (-8.85734150 Ha)");
+    require(std::abs(rhf.totalEnergy - (-7.86202386012712)) < 1e-7,
+            "LiH RHF total energy matches PySCF reference (-7.86202386 Ha)");
+
+    // 10d. Frozen-Core Active-Space Reduction: 1 core orbital (Li 1s), 2 active orbitals (4 qubits)
+    ActiveSpaceConfig actConfig;
+    actConfig.nCore = 1;
+    actConfig.nActive = 2;
+
+    const auto lihHamJW = buildMolecularHamiltonian(lihGeom, MappingType::JordanWigner, actConfig);
+    require(lihHamJW.qubitCount == 4, "LiH active-space Jordan-Wigner Hamiltonian has 4 qubits");
+
+    // Match scalar core energy shift E_core = -6.80297355 Ha
+    require(std::abs(lihHamJW.coreEnergy - (-6.80297354998635)) < 1e-7,
+            "LiH frozen-core scalar energy E_core matches PySCF reference (-6.80297355 Ha)");
+
+    // Match active-space correlation electronic energy E_CI = -1.05931198 Ha
+    require(std::abs(lihHamJW.fciExactElectronicEnergy - (-1.059311983913)) < 1e-7,
+            "LiH active-space FCI electronic correlation energy matches reference (-1.05931198 Ha)");
+
+    // Match PySCF CASCI(2, 2) total energy: E_tot = E_core + E_CI = -7.86228553 Ha
+    require(std::abs(lihHamJW.fciExactTotalEnergy - (-7.86228553389953)) < 1e-7,
+            "LiH active-space exact total energy matches PySCF CASCI(2,2) reference (-7.86228553 Ha)");
+
+    // Exactly-once counting assertion: E_tot == E_core + E_CI
+    require(std::abs(lihHamJW.fciExactTotalEnergy - (lihHamJW.coreEnergy + lihHamJW.fciExactElectronicEnergy)) < 1e-14,
+            "Strict energy identity: E_tot == E_core + E_CI holds exactly");
+
+    // 10e. Parity Mapping Reduction to 2 Qubits
+    const auto lihHamParity = buildMolecularHamiltonian(lihGeom, MappingType::Parity, actConfig);
+    require(lihHamParity.qubitCount == 2, "LiH active-space Parity-reduced Hamiltonian has 2 qubits");
+    require(std::abs(lihHamParity.fciExactTotalEnergy - lihHamJW.fciExactTotalEnergy) < 1e-12,
+            "Parity mapping and Jordan-Wigner mapping produce identical active-space ground total energy");
+  }
 }
 
 } // namespace test

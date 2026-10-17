@@ -89,17 +89,26 @@ enum class MappingType {
   JordanWigner
 };
 
+struct ActiveSpaceConfig {
+  int nCore = 0;   // Number of frozen core spatial orbitals (0 for H2/HeH+; 1 for LiH)
+  int nActive = 2; // Number of active spatial orbitals (default 2)
+};
+
 struct GeneratedHamiltonianResult {
   QubitHamiltonian hamiltonian = QubitHamiltonian(0, {});
   int qubitCount = 0;
   double nuclearRepulsion = 0.0;
+  double coreEnergy = 0.0;              // E_core = E_nuc + core electronic shift
   double rhfTotalEnergy = 0.0;
-  double fciExactElectronicEnergy = 0.0;
-  double fciExactTotalEnergy = 0.0;
+  double fciExactElectronicEnergy = 0.0; // E_CI in active space
+  double fciExactTotalEnergy = 0.0;      // E_tot = E_core + E_CI
+  int activeElectrons = 2;
+  int activeSpatialOrbitals = 2;
   std::string provenance;
 };
 
 GeneratedHamiltonianResult buildMolecularHamiltonian(
     const MolecularGeometry &geometry,
-    MappingType mapping = MappingType::Parity
+    MappingType mapping = MappingType::Parity,
+    const ActiveSpaceConfig &activeSpace = {}
 );
