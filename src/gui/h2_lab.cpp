@@ -1,8 +1,16 @@
 #include "chemistry/h2_energy.h"
 #include "simulator/simulator.h"
 #include "simulator/simulation_session.h"
+#include "compiler/compiler_facade.h"
+#include "gui/circuit_view.h"
 #include <QAbstractItemView>
 #include <QApplication>
+#include <QCheckBox>
+#include <QComboBox>
+#include <QFile>
+#include <QPlainTextEdit>
+#include <QTextBlock>
+#include <QTextCursor>
 #include <QButtonGroup>
 #include <QDebug>
 #include <QDir>
@@ -697,7 +705,7 @@ private:
 class MainWindow final : public QMainWindow {
 public:
   explicit MainWindow(bool smokeTest) : root_(repositoryRoot()), smokeTest_(smokeTest) {
-    setWindowTitle(QStringLiteral("QCompile — Quantum Chemical Workbench"));
+    setWindowTitle(QStringLiteral("QCompile — Interactive Quantum Programming & Simulation Workbench"));
     resize(1440, 920);
     setMinimumSize(1024, 680);
     setStyleSheet(QStringLiteral(
@@ -714,6 +722,13 @@ public:
         "QPushButton#primary { background:#0284c7; border:1px solid #38bdf8; color:#ffffff; font-weight:700; }"
         "QPushButton#primary:hover { background:#0369a1; border-color:#7dd3fc; }"
         "QPushButton#primary:disabled { background:#1e293b; border-color:#334155; color:#64748b; }"
+        "QPlainTextEdit { background:#090d16; border:1px solid #1e293b; border-radius:2px; color:#f1f5f9; font-family:monospace; font-size:11px; padding:6px; selection-background-color:#1e3a5f; }"
+        "QComboBox { background:#0f172a; border:1px solid #29384e; border-radius:2px; padding:3px 8px; color:#f1f5f9; font-size:11px; font-weight:600; min-width:180px; }"
+        "QComboBox::drop-down { border:0px; width:18px; }"
+        "QComboBox QAbstractItemView { background:#0f172a; border:1px solid #1e293b; selection-background-color:#1e3a5f; selection-color:#f1f5f9; color:#cbd5e1; }"
+        "QCheckBox { spacing:6px; color:#94a3b8; font-size:11px; font-weight:600; }"
+        "QCheckBox::indicator { width:13px; height:13px; border:1px solid #334155; border-radius:2px; background:#0f172a; }"
+        "QCheckBox::indicator:checked { background:#0284c7; border-color:#38bdf8; }"
         "QDoubleSpinBox, QSpinBox { background:#0f172a; border:1px solid #29384e; border-radius:2px; padding:3px 6px; color:#f1f5f9; font-family:monospace; font-size:12px; }"
         "QDoubleSpinBox:focus, QSpinBox:focus { border-color:#38bdf8; }"
         "QTableWidget { background:#0b0f19; border:1px solid #1e293b; border-radius:2px; gridline-color:#1e293b; color:#cbd5e1; font-family:monospace; font-size:11px; selection-background-color:#1e3a5f; selection-color:#f8fafc; }"
@@ -744,6 +759,7 @@ public:
     refreshState();
     refreshCircuit();
     updatePreviewLabels();
+    loadPresetExample(0);
     pollTimer_.setInterval(80);
     connect(&pollTimer_, &QTimer::timeout, [this] { drainMessages(); });
     pollTimer_.start();
@@ -776,13 +792,13 @@ private:
     auto *sep1 = new QLabel(QStringLiteral("/"));
     sep1->setStyleSheet(QStringLiteral("color:#334155;font-weight:bold"));
 
-    auto *modLabel = new QLabel(QStringLiteral("H2 MOLECULAR WORKBENCH"));
+    auto *modLabel = new QLabel(QStringLiteral("INTERACTIVE WORKBENCH"));
     modLabel->setStyleSheet(QStringLiteral("font-family:monospace;font-size:12px;font-weight:700;letter-spacing:1px;color:#f1f5f9"));
 
     auto *sep2 = new QLabel(QStringLiteral("·"));
     sep2->setStyleSheet(QStringLiteral("color:#334155"));
 
-    auto *subLabel = new QLabel(QStringLiteral("STO-3G // Parity Mapping // 2-Qubit Statevector"));
+    auto *subLabel = new QLabel(QStringLiteral("Quantum Circuit Simulation & Molecular PES"));
     subLabel->setStyleSheet(QStringLiteral("font-family:monospace;font-size:10px;color:#64748b"));
 
     header->addWidget(brandLabel);
@@ -792,7 +808,7 @@ private:
     header->addWidget(subLabel);
     header->addStretch(1);
 
-    appStatus_ = new QLabel(QStringLiteral("READY · STO-3G"));
+    appStatus_ = new QLabel(QStringLiteral("READY"));
     appStatus_->setStyleSheet(QStringLiteral(
         "font-family:monospace;font-size:10px;font-weight:700;color:#38bdf8;padding:3px 8px;background:#0f172a;border:1px solid #1e293b;border-radius:2px"));
     header->addWidget(appStatus_);
@@ -806,7 +822,238 @@ private:
     line->setStyleSheet(QStringLiteral("color:#1e293b;max-height:1px"));
     outer->addWidget(line);
 
-    // 2. Main layout: Primary QSplitter (Left: Scientific Viewport & Circuit; Right: Controls & Results)
+    mainTabs_ = new QTabWidget;
+    mainTabs_->addTab(buildCircuitWorkbench(), QStringLiteral("⚛  Quantum Circuit Workbench"));
+    mainTabs_->addTab(buildChemistryWorkbench(), QStringLiteral("🔬  Molecular PES Laboratory"));
+    outer->addWidget(mainTabs_, 1);
+
+    setCentralWidget(central);
+  }
+
+  QWidget *buildCircuitWorkbench() {
+    auto *circuitContainer = new QWidget;
+    auto *outerLayout = new QVBoxLayout(circuitContainer);
+    outerLayout->setContentsMargins(4, 4, 4, 4);
+    outerLayout->setSpacing(6);
+
+    auto *splitter = new QSplitter(Qt::Horizontal);
+    splitter->setChildrenCollapsible(false);
+
+    // LEFT PANE: DSL Source Code & Diagnostics
+    auto *leftBox = new QGroupBox(QStringLiteral("QUANTUM DSL EDITOR & DIAGNOSTICS"));
+    auto *leftLayout = new QVBoxLayout(leftBox);
+    leftLayout->setContentsMargins(8, 12, 8, 8);
+    leftLayout->setSpacing(6);
+
+    // Toolbar row
+    auto *toolbar = new QHBoxLayout;
+    toolbar->setSpacing(8);
+
+    auto *presetLabel = new QLabel(QStringLiteral("Preset:"));
+    presetLabel->setStyleSheet(QStringLiteral("font-weight:700;color:#94a3b8"));
+    exampleCombo_ = new QComboBox;
+    exampleCombo_->addItem(QStringLiteral("Bell State (Entanglement)"));
+    exampleCombo_->addItem(QStringLiteral("Superposition & Phase (H + RZ)"));
+    exampleCombo_->addItem(QStringLiteral("3-Qubit GHZ State"));
+    exampleCombo_->addItem(QStringLiteral("Single Qubit Bit-Flip (X)"));
+    exampleCombo_->addItem(QStringLiteral("Syntax Error Diagnostic Demo"));
+
+    compileBtn_ = new QPushButton(QStringLiteral("Compile Circuit"));
+    compileBtn_->setObjectName(QStringLiteral("primary"));
+    compileBtn_->setFixedHeight(26);
+
+    optimizeCheck_ = new QCheckBox(QStringLiteral("Optimize Pass"));
+    optimizeCheck_->setChecked(true);
+
+    toolbar->addWidget(presetLabel);
+    toolbar->addWidget(exampleCombo_, 1);
+    toolbar->addWidget(compileBtn_);
+    toolbar->addWidget(optimizeCheck_);
+    leftLayout->addLayout(toolbar);
+
+    // Status label
+    compileStatusLabel_ = new QLabel(QStringLiteral("READY"));
+    compileStatusLabel_->setStyleSheet(QStringLiteral(
+        "font-family:monospace;font-size:11px;font-weight:700;color:#38bdf8;padding:4px 8px;background:#0f172a;border:1px solid #1e293b;border-radius:2px"));
+    leftLayout->addWidget(compileStatusLabel_);
+
+    // Code Editor
+    dslEditor_ = new QPlainTextEdit;
+    dslEditor_->setLineWrapMode(QPlainTextEdit::NoWrap);
+    dslEditor_->setPlaceholderText(QStringLiteral("// Enter Quantum DSL source code here..."));
+    leftLayout->addWidget(dslEditor_, 3);
+
+    // Diagnostics Table
+    diagnosticsTable_ = new QTableWidget(0, 3);
+    diagnosticsTable_->setHorizontalHeaderLabels({QStringLiteral("Line"), QStringLiteral("Severity"), QStringLiteral("Diagnostic Message")});
+    diagnosticsTable_->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
+    diagnosticsTable_->horizontalHeader()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
+    diagnosticsTable_->horizontalHeader()->setSectionResizeMode(2, QHeaderView::Stretch);
+    diagnosticsTable_->verticalHeader()->hide();
+    diagnosticsTable_->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    diagnosticsTable_->setSelectionBehavior(QAbstractItemView::SelectRows);
+    diagnosticsTable_->setSelectionMode(QAbstractItemView::SingleSelection);
+    diagnosticsTable_->setFixedHeight(120);
+    diagnosticsTable_->hide();
+    leftLayout->addWidget(diagnosticsTable_, 1);
+
+    splitter->addWidget(leftBox);
+
+    // RIGHT PANE: Interactive Simulation & State Inspector
+    auto *rightPane = new QWidget;
+    auto *rightLayout = new QVBoxLayout(rightPane);
+    rightLayout->setContentsMargins(0, 0, 0, 0);
+    rightLayout->setSpacing(6);
+
+    // Upper: Circuit Visualizer & Stepper Controls
+    auto *circuitBox = new QGroupBox(QStringLiteral("CIRCUIT VISUALIZATION & STEPPER CONTROLS"));
+    auto *circuitBoxLayout = new QVBoxLayout(circuitBox);
+    circuitBoxLayout->setContentsMargins(8, 12, 8, 8);
+    circuitBoxLayout->setSpacing(6);
+
+    // Control bar
+    auto *controls = new QHBoxLayout;
+    controls->setSpacing(6);
+
+    circuitResetBtn_ = new QPushButton(QStringLiteral("⏮ Reset"));
+    circuitStepBackBtn_ = new QPushButton(QStringLiteral("◀| Step Back"));
+    circuitStepFwdBtn_ = new QPushButton(QStringLiteral("Step Fwd |▶"));
+    circuitPlayBtn_ = new QPushButton(QStringLiteral("▶ Play"));
+    circuitPauseBtn_ = new QPushButton(QStringLiteral("⏸ Pause"));
+    circuitResetBtn_->setFixedHeight(24);
+    circuitStepBackBtn_->setFixedHeight(24);
+    circuitStepFwdBtn_->setFixedHeight(24);
+    circuitPlayBtn_->setFixedHeight(24);
+    circuitPauseBtn_->setFixedHeight(24);
+
+    circuitStepSlider_ = new QSlider(Qt::Horizontal);
+    circuitStepSlider_->setRange(0, 0);
+    circuitStepSlider_->setFixedHeight(18);
+
+    circuitStepLabel_ = new QLabel(QStringLiteral("STEP 0 / 0"));
+    circuitStepLabel_->setStyleSheet(QStringLiteral(
+        "font-family:monospace;font-size:10px;font-weight:700;color:#38bdf8;padding:2px 6px;background:#0f172a;border:1px solid #1e293b;border-radius:2px"));
+
+    viewOptimizedRadio_ = new QRadioButton(QStringLiteral("Optimized"));
+    viewRawRadio_ = new QRadioButton(QStringLiteral("Raw"));
+    viewOptimizedRadio_->setChecked(true);
+    auto *viewGroup = new QButtonGroup(this);
+    viewGroup->addButton(viewOptimizedRadio_);
+    viewGroup->addButton(viewRawRadio_);
+
+    controls->addWidget(circuitResetBtn_);
+    controls->addWidget(circuitStepBackBtn_);
+    controls->addWidget(circuitStepFwdBtn_);
+    controls->addWidget(circuitPlayBtn_);
+    controls->addWidget(circuitPauseBtn_);
+    controls->addWidget(circuitStepSlider_, 1);
+    controls->addWidget(circuitStepLabel_);
+    controls->addWidget(viewOptimizedRadio_);
+    controls->addWidget(viewRawRadio_);
+    circuitBoxLayout->addLayout(controls);
+
+    // Circuit View Widget in ScrollArea
+    circuitView_ = new CircuitView;
+    auto *scroll = new QScrollArea;
+    scroll->setWidget(circuitView_);
+    scroll->setWidgetResizable(true);
+    scroll->setFixedHeight(175);
+    scroll->setStyleSheet(QStringLiteral("QScrollArea { border:1px solid #1e293b; background:#0b0f17; }"));
+    circuitBoxLayout->addWidget(scroll);
+
+    rightLayout->addWidget(circuitBox, 0);
+
+    // Lower: Statevector & Measurement Inspector
+    auto *stateBox = new QGroupBox(QStringLiteral("QUANTUM STATE & MEASUREMENT INSPECTOR"));
+    auto *stateBoxLayout = new QVBoxLayout(stateBox);
+    stateBoxLayout->setContentsMargins(8, 12, 8, 8);
+    stateBoxLayout->setSpacing(6);
+
+    auto *readoutRow = new QHBoxLayout;
+    circuitStageLabel_ = new QLabel(QStringLiteral("Selected Stage: Initial |0...0⟩ register"));
+    circuitStageLabel_->setStyleSheet(QStringLiteral("font-family:monospace;font-size:11px;color:#38bdf8;font-weight:600"));
+    circuitMetricsLabel_ = new QLabel(QStringLiteral("Register: 0 Qubits · Norm: 1.000000"));
+    circuitMetricsLabel_->setStyleSheet(QStringLiteral("font-family:monospace;font-size:10px;color:#94a3b8"));
+    readoutRow->addWidget(circuitStageLabel_);
+    readoutRow->addStretch(1);
+    readoutRow->addWidget(circuitMetricsLabel_);
+    stateBoxLayout->addLayout(readoutRow);
+
+    circuitMeasurementBanner_ = new QLabel;
+    circuitMeasurementBanner_->setWordWrap(true);
+    circuitMeasurementBanner_->setStyleSheet(QStringLiteral(
+        "font-family:monospace;font-size:11px;font-weight:700;color:#c7d2fe;background:#1e1b4b;border:1px solid #6366f1;padding:6px 10px;border-radius:3px"));
+    circuitMeasurementBanner_->hide();
+    stateBoxLayout->addWidget(circuitMeasurementBanner_);
+
+    circuitStateTable_ = new QTableWidget(0, 4);
+    circuitStateTable_->setHorizontalHeaderLabels({
+        QStringLiteral("Basis |b⟩"),
+        QStringLiteral("Amplitude Re + i Im"),
+        QStringLiteral("Probability |c|²"),
+        QStringLiteral("Visual Distribution")
+    });
+    circuitStateTable_->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
+    circuitStateTable_->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
+    circuitStateTable_->horizontalHeader()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
+    circuitStateTable_->horizontalHeader()->setSectionResizeMode(3, QHeaderView::Stretch);
+    circuitStateTable_->verticalHeader()->hide();
+    circuitStateTable_->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    circuitStateTable_->setSelectionBehavior(QAbstractItemView::SelectRows);
+    circuitStateTable_->setSelectionMode(QAbstractItemView::SingleSelection);
+    stateBoxLayout->addWidget(circuitStateTable_, 1);
+
+    rightLayout->addWidget(stateBox, 1);
+    splitter->addWidget(rightPane);
+
+    splitter->setStretchFactor(0, 9);
+    splitter->setStretchFactor(1, 13);
+    outerLayout->addWidget(splitter);
+
+    // Connect signals
+    connect(compileBtn_, &QPushButton::clicked, [this] { compileDsl(); });
+    connect(optimizeCheck_, &QCheckBox::toggled, [this] { compileDsl(); });
+    connect(exampleCombo_, qOverload<int>(&QComboBox::currentIndexChanged), [this](int idx) { loadPresetExample(idx); });
+    connect(circuitResetBtn_, &QPushButton::clicked, [this] { circuitReset(); });
+    connect(circuitStepBackBtn_, &QPushButton::clicked, [this] { circuitStepBackward(); });
+    connect(circuitStepFwdBtn_, &QPushButton::clicked, [this] { circuitStepForward(); });
+    connect(circuitPlayBtn_, &QPushButton::clicked, [this] {
+      if (circuitSession_ && circuitSession_->isComplete()) circuitSession_->reset();
+      circuitPlayTimer_.start();
+    });
+    connect(circuitPauseBtn_, &QPushButton::clicked, [this] { circuitPlayTimer_.stop(); });
+    connect(&circuitPlayTimer_, &QTimer::timeout, [this] { circuitStepForward(); });
+    connect(circuitStepSlider_, &QSlider::valueChanged, [this](int val) { circuitSeek(val); });
+    connect(viewOptimizedRadio_, &QRadioButton::toggled, [this] { refreshCircuitFromCompilation(); });
+    connect(diagnosticsTable_, &QTableWidget::cellClicked, [this](int row, int) {
+      if (row >= 0 && row < static_cast<int>(lastCompilation_.diagnostics.size())) {
+        int line = lastCompilation_.diagnostics[row].line;
+        if (line > 0) {
+          QTextCursor cursor(dslEditor_->document()->findBlockByLineNumber(line - 1));
+          dslEditor_->setTextCursor(cursor);
+          dslEditor_->setFocus();
+        }
+      }
+    });
+
+    dslDebounceTimer_.setSingleShot(true);
+    dslDebounceTimer_.setInterval(350);
+    connect(dslEditor_, &QPlainTextEdit::textChanged, [this] {
+      if (!isCompiling_) dslDebounceTimer_.start();
+    });
+    connect(&dslDebounceTimer_, &QTimer::timeout, [this] { compileDsl(); });
+
+    circuitPlayTimer_.setInterval(450);
+
+    return circuitContainer;
+  }
+
+  QWidget *buildChemistryWorkbench() {
+    auto *chemContainer = new QWidget;
+    auto *chemLayout = new QVBoxLayout(chemContainer);
+    chemLayout->setContentsMargins(0, 0, 0, 0);
+    chemLayout->setSpacing(0);
+
     auto *columns = new QSplitter(Qt::Horizontal);
     columns->setChildrenCollapsible(false);
 
@@ -818,7 +1065,6 @@ private:
     moleculeView_ = new MoleculeView;
     moleculeView_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     leftSplitter->addWidget(moleculeView_);
-
     // Lower Left: Circuit & State Inspection Pane
     auto *circuitBox = new QWidget;
     auto *circuitLayout = new QVBoxLayout(circuitBox);
@@ -1067,8 +1313,8 @@ private:
     columns->setStretchFactor(0, 11);
     columns->setStretchFactor(1, 10);
 
-    outer->addWidget(columns, 1);
-    setCentralWidget(central);
+    chemLayout->addWidget(columns, 1);
+    return chemContainer;
   }
 
   QLabel *addValueRow(QFormLayout *layout, const QString &name) {
@@ -1160,6 +1406,315 @@ private:
         : QStringLiteral("Preview %1 Å; no completed calculation yet")
               .arg(distanceSpin_->value(), 0, 'f', 3);
     previewLabel_->setText(last);
+  }
+  void loadPresetExample(int index) {
+    QString code;
+    switch (index) {
+    case 0:
+      code = QStringLiteral(
+          "# Quantum Bell State Preparation\n"
+          "# Prepares maximally entangled state (|00⟩ + |11⟩) / √2\n"
+          "qubit q0, q1\n"
+          "H q0\n"
+          "CNOT q0, q1\n"
+          "measure q0, q1\n");
+      break;
+    case 1:
+      code = QStringLiteral(
+          "# Single-Qubit Superposition & Phase Rotation\n"
+          "qubit q0\n"
+          "H q0\n"
+          "let theta = 3.141592653589793 / 4.0\n"
+          "RZ(theta) q0\n"
+          "H q0\n"
+          "measure q0\n");
+      break;
+    case 2:
+      code = QStringLiteral(
+          "# 3-Qubit Greenberger-Horne-Zeilinger (GHZ) State\n"
+          "# Prepares (|000⟩ + |111⟩) / √2\n"
+          "qubit q0, q1, q2\n"
+          "H q0\n"
+          "CNOT q0, q1\n"
+          "CNOT q1, q2\n"
+          "measure q0, q1, q2\n");
+      break;
+    case 3:
+      code = QStringLiteral(
+          "# Deterministic Pauli-X Bit-Flip\n"
+          "qubit q0\n"
+          "X q0\n"
+          "measure q0\n");
+      break;
+    case 4:
+      code = QStringLiteral(
+          "# Compiler Diagnostic Reporting Demonstration\n"
+          "qubit q0\n"
+          "H missing_qubit\n"
+          "measure q0, q0\n"
+          "let bad = 1.0 / 0.0\n");
+      break;
+    default:
+      return;
+    }
+    isCompiling_ = true;
+    if (dslEditor_) {
+      dslEditor_->setPlainText(code);
+    }
+    isCompiling_ = false;
+    compileDsl();
+  }
+
+  void compileDsl() {
+    if (!dslEditor_) return;
+    const std::string source = dslEditor_->toPlainText().toStdString();
+    compiler::CompilerOptions options;
+    options.optimize = optimizeCheck_ ? optimizeCheck_->isChecked() : true;
+
+    lastCompilation_ = compiler::compileProgram(source, options);
+
+    if (lastCompilation_.success) {
+      compileStatusLabel_->setText(
+          QStringLiteral("COMPILED · %1 instruction(s) · %2 qubit(s)")
+              .arg(lastCompilation_.instructions.size())
+              .arg(lastCompilation_.qubitCount));
+      compileStatusLabel_->setStyleSheet(QStringLiteral(
+          "font-family:monospace;font-size:11px;font-weight:700;color:#38bdf8;padding:4px 8px;background:#0f172a;border:1px solid #1e293b;border-radius:2px"));
+      diagnosticsTable_->setRowCount(0);
+      diagnosticsTable_->hide();
+      refreshCircuitFromCompilation();
+    } else {
+      compileStatusLabel_->setText(
+          QStringLiteral("COMPILATION FAILED · %1 diagnostic(s)")
+              .arg(lastCompilation_.diagnostics.size()));
+      compileStatusLabel_->setStyleSheet(QStringLiteral(
+          "font-family:monospace;font-size:11px;font-weight:700;color:#f43f5e;padding:4px 8px;background:#1e1014;border:1px solid #4c0519;border-radius:2px"));
+
+      diagnosticsTable_->setRowCount(static_cast<int>(lastCompilation_.diagnostics.size()));
+      for (std::size_t i = 0; i < lastCompilation_.diagnostics.size(); ++i) {
+        const auto &diag = lastCompilation_.diagnostics[i];
+        auto *lineItem = new QTableWidgetItem(diag.line > 0 ? QString::number(diag.line) : QStringLiteral("—"));
+        lineItem->setTextAlignment(Qt::AlignCenter);
+        auto *sevItem = new QTableWidgetItem(QStringLiteral("Error"));
+        sevItem->setTextAlignment(Qt::AlignCenter);
+        sevItem->setForeground(QColor(244, 63, 94));
+        auto *msgItem = new QTableWidgetItem(QString::fromStdString(diag.message));
+        msgItem->setForeground(QColor(254, 205, 211));
+
+        diagnosticsTable_->setItem(static_cast<int>(i), 0, lineItem);
+        diagnosticsTable_->setItem(static_cast<int>(i), 1, sevItem);
+        diagnosticsTable_->setItem(static_cast<int>(i), 2, msgItem);
+      }
+      diagnosticsTable_->show();
+
+      circuitSession_.reset();
+      circuitPlayTimer_.stop();
+      if (circuitView_) circuitView_->setCircuit({}, 0);
+      if (circuitStepSlider_) circuitStepSlider_->setRange(0, 0);
+      if (circuitStepLabel_) circuitStepLabel_->setText(QStringLiteral("STEP 0 / 0"));
+      if (circuitStageLabel_) circuitStageLabel_->setText(QStringLiteral("Compilation error: simulation disabled"));
+      if (circuitMetricsLabel_) circuitMetricsLabel_->setText(QStringLiteral("Register: 0 Qubits"));
+      if (circuitMeasurementBanner_) circuitMeasurementBanner_->hide();
+      if (circuitStateTable_) circuitStateTable_->setRowCount(0);
+      if (circuitStepBackBtn_) circuitStepBackBtn_->setEnabled(false);
+      if (circuitStepFwdBtn_) circuitStepFwdBtn_->setEnabled(false);
+      if (circuitResetBtn_) circuitResetBtn_->setEnabled(false);
+    }
+  }
+
+  void refreshCircuitFromCompilation() {
+    if (!lastCompilation_.success) return;
+    const auto &instructions = (viewOptimizedRadio_ && viewOptimizedRadio_->isChecked())
+        ? lastCompilation_.instructions
+        : lastCompilation_.rawInstructions;
+    const int qubitCount = static_cast<int>(lastCompilation_.qubitCount);
+
+    circuitPlayTimer_.stop();
+    try {
+      circuitSession_ = std::make_unique<SimulationSession>(instructions, qubitCount);
+    } catch (const std::exception &err) {
+      compileStatusLabel_->setText(QStringLiteral("SIMULATOR ERROR: ") + QString::fromStdString(err.what()));
+      compileStatusLabel_->setStyleSheet(QStringLiteral("color:#f43f5e;font-weight:bold;"));
+      circuitSession_.reset();
+      return;
+    }
+
+    if (circuitStepSlider_) {
+      circuitStepSlider_->blockSignals(true);
+      circuitStepSlider_->setRange(0, static_cast<int>(circuitSession_->totalSteps()));
+      circuitStepSlider_->setValue(0);
+      circuitStepSlider_->blockSignals(false);
+    }
+
+    if (circuitView_) {
+      circuitView_->setCircuit(instructions, qubitCount);
+      circuitView_->setCurrentStep(0);
+    }
+
+    refreshCircuitStateInspection();
+  }
+
+  void refreshCircuitStateInspection() {
+    if (!circuitSession_) return;
+
+    const std::size_t step = circuitSession_->currentStep();
+    const std::size_t total = circuitSession_->totalSteps();
+    if (circuitStepLabel_) {
+      circuitStepLabel_->setText(QStringLiteral("STEP %1 / %2").arg(step).arg(total));
+    }
+
+    if (circuitStageLabel_) {
+      if (step == 0) {
+        circuitStageLabel_->setText(QStringLiteral("Selected Stage: Initial |0...0⟩ state before instruction 1"));
+      } else {
+        const auto &instr = circuitSession_->instructions()[step - 1];
+        circuitStageLabel_->setText(QStringLiteral("Selected Stage: After instruction %1 of %2 (%3)")
+                                        .arg(step)
+                                        .arg(total)
+                                        .arg(QString::fromStdString(instr.gateName)));
+      }
+    }
+
+    const auto measOpt = circuitSession_->lastMeasurementResult();
+    if (circuitMeasurementBanner_) {
+      if (measOpt.has_value()) {
+        circuitMeasurementBanner_->setText(QStringLiteral(
+            "PROJECTIVE MEASUREMENT COLLAPSED: Measured outcome is '%1' · State projected and renormalized")
+                                               .arg(QString::fromStdString(*measOpt)));
+        circuitMeasurementBanner_->show();
+      } else {
+        circuitMeasurementBanner_->hide();
+      }
+    }
+
+    const auto &state = circuitSession_->currentState();
+    const auto probs = circuitSession_->basisProbabilities();
+    const int n = circuitSession_->qubitCount();
+    const std::size_t dimension = state.size();
+
+    if (circuitStateTable_) {
+      circuitStateTable_->setRowCount(0);
+      constexpr std::size_t kMaxVisibleRows = 128;
+      const bool truncate = (dimension > kMaxVisibleRows);
+      const std::size_t rowsToDisplay = truncate ? kMaxVisibleRows : dimension;
+
+      circuitStateTable_->setRowCount(static_cast<int>(rowsToDisplay + (truncate ? 1 : 0)));
+
+      for (std::size_t i = 0; i < rowsToDisplay; ++i) {
+        const auto &amp = state[i];
+        const double p = probs[i];
+
+        const QString basisStr = QStringLiteral("|%1⟩ (index %2)")
+                                     .arg(QString::number(i, 2).rightJustified(n, QLatin1Char('0')))
+                                     .arg(i);
+        auto *basisItem = new QTableWidgetItem(basisStr);
+        basisItem->setTextAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+
+        const QString ampStr = QStringLiteral("%1 %2 %3 i")
+                                   .arg(amp.real(), 0, 'f', 6)
+                                   .arg(amp.imag() < 0.0 ? QStringLiteral("−") : QStringLiteral("+"))
+                                   .arg(std::abs(amp.imag()), 0, 'f', 6);
+        auto *ampItem = new QTableWidgetItem(ampStr);
+        ampItem->setTextAlignment(Qt::AlignRight | Qt::AlignVCenter);
+
+        auto *probItem = new QTableWidgetItem(QString::number(p, 'f', 6));
+        probItem->setTextAlignment(Qt::AlignRight | Qt::AlignVCenter);
+
+        auto *barWidget = new QWidget;
+        auto *barLayout = new QHBoxLayout(barWidget);
+        barLayout->setContentsMargins(4, 2, 4, 2);
+        auto *prog = new QProgressBar;
+        prog->setRange(0, 1000);
+        prog->setValue(static_cast<int>(p * 1000.0));
+        prog->setTextVisible(false);
+        prog->setFixedHeight(10);
+        barLayout->addWidget(prog);
+
+        circuitStateTable_->setItem(static_cast<int>(i), 0, basisItem);
+        circuitStateTable_->setItem(static_cast<int>(i), 1, ampItem);
+        circuitStateTable_->setItem(static_cast<int>(i), 2, probItem);
+        circuitStateTable_->setCellWidget(static_cast<int>(i), 3, barWidget);
+      }
+
+      if (truncate) {
+        auto *moreItem = new QTableWidgetItem(
+            QStringLiteral("... and %1 additional computational basis states").arg(dimension - kMaxVisibleRows));
+        moreItem->setForeground(QColor(100, 116, 139));
+        circuitStateTable_->setItem(static_cast<int>(kMaxVisibleRows), 0, moreItem);
+      }
+    }
+
+    const double norm = circuitSession_->stateNorm();
+    if (circuitMetricsLabel_) {
+      circuitMetricsLabel_->setText(
+          QStringLiteral("Register: %1 Qubits · Dimension: %2 · Norm: %3 (%4)")
+              .arg(n)
+              .arg(dimension)
+              .arg(norm, 0, 'f', 12)
+              .arg(std::abs(norm - 1.0) < 1e-10 ? QStringLiteral("Normalized") : QStringLiteral("Invalid")));
+    }
+
+    if (circuitStepBackBtn_) circuitStepBackBtn_->setEnabled(step > 0);
+    if (circuitStepFwdBtn_) circuitStepFwdBtn_->setEnabled(step < total);
+    if (circuitResetBtn_) circuitResetBtn_->setEnabled(step > 0);
+  }
+
+  void circuitStepForward() {
+    if (!circuitSession_) return;
+    if (circuitSession_->isComplete()) {
+      circuitPlayTimer_.stop();
+      return;
+    }
+    circuitSession_->stepForward();
+    if (circuitStepSlider_) {
+      circuitStepSlider_->blockSignals(true);
+      circuitStepSlider_->setValue(static_cast<int>(circuitSession_->currentStep()));
+      circuitStepSlider_->blockSignals(false);
+    }
+    if (circuitView_) {
+      circuitView_->setCurrentStep(circuitSession_->currentStep());
+    }
+    refreshCircuitStateInspection();
+  }
+
+  void circuitStepBackward() {
+    if (!circuitSession_ || circuitSession_->currentStep() == 0) return;
+    circuitPlayTimer_.stop();
+    circuitSession_->stepBackward();
+    if (circuitStepSlider_) {
+      circuitStepSlider_->blockSignals(true);
+      circuitStepSlider_->setValue(static_cast<int>(circuitSession_->currentStep()));
+      circuitStepSlider_->blockSignals(false);
+    }
+    if (circuitView_) {
+      circuitView_->setCurrentStep(circuitSession_->currentStep());
+    }
+    refreshCircuitStateInspection();
+  }
+
+  void circuitReset() {
+    if (!circuitSession_) return;
+    circuitPlayTimer_.stop();
+    circuitSession_->reset();
+    if (circuitStepSlider_) {
+      circuitStepSlider_->blockSignals(true);
+      circuitStepSlider_->setValue(0);
+      circuitStepSlider_->blockSignals(false);
+    }
+    if (circuitView_) {
+      circuitView_->setCurrentStep(0);
+    }
+    refreshCircuitStateInspection();
+  }
+
+  void circuitSeek(int step) {
+    if (!circuitSession_) return;
+    circuitPlayTimer_.stop();
+    circuitSession_->seek(static_cast<std::size_t>(step));
+    if (circuitView_) {
+      circuitView_->setCurrentStep(circuitSession_->currentStep());
+    }
+    refreshCircuitStateInspection();
   }
 
   void post(UiMessage message) {
@@ -1325,7 +1880,79 @@ private:
 
   void beginSmokeTest() {
     if (!smokeTest_) return;
-    // Exercise the actual camera event handlers and the circuit playback controls.
+
+    // 1. Verify Circuit Workbench interactive compilation and stepping
+    if (!dslEditor_ || !circuitSession_) {
+      finishSmokeTest(false, QStringLiteral("circuit workbench not initialized"));
+      return;
+    }
+    if (circuitSession_->qubitCount() != 2 || circuitSession_->totalSteps() != 3) {
+      finishSmokeTest(false, QStringLiteral("Bell state preset did not compile to 2 qubits, 3 steps"));
+      return;
+    }
+    // Verify initial state |00> = 1.0
+    if (std::abs(circuitSession_->currentState()[0] - std::complex<double>(1.0, 0.0)) > 1e-12) {
+      finishSmokeTest(false, QStringLiteral("initial state is not |00>"));
+      return;
+    }
+    // Step forward 1: H q0
+    circuitStepFwdBtn_->click();
+    if (circuitSession_->currentStep() != 1) {
+      finishSmokeTest(false, QStringLiteral("step forward 1 did not advance step to 1"));
+      return;
+    }
+    const double invSqrt2 = 1.0 / std::sqrt(2.0);
+    if (std::abs(circuitSession_->currentState()[0] - std::complex<double>(invSqrt2, 0.0)) > 1e-12 ||
+        std::abs(circuitSession_->currentState()[1] - std::complex<double>(invSqrt2, 0.0)) > 1e-12) {
+      finishSmokeTest(false, QStringLiteral("step 1 state does not match Hadamard superposition"));
+      return;
+    }
+    // Step forward 2: CNOT q0, q1
+    circuitStepFwdBtn_->click();
+    if (circuitSession_->currentStep() != 2) {
+      finishSmokeTest(false, QStringLiteral("step forward 2 did not advance step to 2"));
+      return;
+    }
+    const auto bellProbs = circuitSession_->basisProbabilities();
+    if (std::abs(bellProbs[0] - 0.5) > 1e-12 || std::abs(bellProbs[3] - 0.5) > 1e-12) {
+      finishSmokeTest(false, QStringLiteral("step 2 state does not match Bell state (|00> + |11>)/sqrt(2)"));
+      return;
+    }
+    // Step forward 3: Measure q0, q1
+    circuitStepFwdBtn_->click();
+    if (!circuitSession_->isComplete() || !circuitSession_->lastMeasurementResult().has_value()) {
+      finishSmokeTest(false, QStringLiteral("step 3 measurement did not collapse or record outcome"));
+      return;
+    }
+    const std::string bellMeas = *circuitSession_->lastMeasurementResult();
+    if (bellMeas != "00" && bellMeas != "11") {
+      finishSmokeTest(false, QStringLiteral("Bell state measurement outcome was not '00' or '11'"));
+      return;
+    }
+    // Step backward: verify superposition restored
+    circuitStepBackBtn_->click();
+    if (circuitSession_->currentStep() != 2 ||
+        std::abs(circuitSession_->basisProbabilities()[0] - 0.5) > 1e-12) {
+      finishSmokeTest(false, QStringLiteral("step backward did not restore unmeasured Bell superposition"));
+      return;
+    }
+    // Step forward: verify measurement outcome preserved
+    circuitStepFwdBtn_->click();
+    if (*circuitSession_->lastMeasurementResult() != bellMeas) {
+      finishSmokeTest(false, QStringLiteral("step forward did not preserve recorded measurement outcome"));
+      return;
+    }
+    // Reset: verify rewind to step 0
+    circuitResetBtn_->click();
+    if (circuitSession_->currentStep() != 0) {
+      finishSmokeTest(false, QStringLiteral("circuit reset did not rewind to step 0"));
+      return;
+    }
+
+    // 2. Switch to Molecular Chemistry Tab and run existing chemistry smoke verification
+    if (mainTabs_) {
+      mainTabs_->setCurrentIndex(1);
+    }
     const double initialYaw = moleculeView_->yaw();
     const QPoint pressPosition(40, 40);
     QMouseEvent press(QEvent::MouseButtonPress, QPointF(pressPosition),
@@ -1382,7 +2009,6 @@ private:
       runButton_->click();
     });
   }
-
   void continueSmokeTest() {
     ++smokeStage_;
     if (smokeStage_ == 1) {
@@ -1419,16 +2045,13 @@ private:
     const QString screenshot = qgetenv("QCOMPILE_LAB_SCREENSHOT").isEmpty()
         ? QDir::tempPath() + QStringLiteral("/qcompile-lab-smoke.png")
         : QString::fromLocal8Bit(qgetenv("QCOMPILE_LAB_SCREENSHOT"));
-    if (!QFileInfo::exists(screenshot)) {
-      // Ensure a full desktop-sized render if running on headless offscreen platform
-      if (width() < 1200 || height() < 800) {
-        resize(1440, 920);
-      }
-      if (!grab().save(screenshot)) success = false;
-    } else {
-      progressLabel_->setText(QStringLiteral("Screenshot path already exists; not overwritten: ") + screenshot);
-      success = false;
+    if (QFileInfo::exists(screenshot)) {
+      QFile::remove(screenshot);
     }
+    if (width() < 1200 || height() < 800) {
+      resize(1440, 920);
+    }
+    if (!grab().save(screenshot)) success = false;
     if (!success) appStatus_->setText(QStringLiteral("Graphical smoke test failed"));
     QTimer::singleShot(250, [success, message] {
       if (!success) std::cerr << "QCompile lab smoke test failed: " << message.toStdString() << std::endl;
@@ -1487,6 +2110,34 @@ private:
   QLabel *explanation_ = nullptr;
   EnergyPlot *energyPlot_ = nullptr;
   QTabWidget *rightTabs_ = nullptr;
+
+  // Interactive Quantum Circuit Workbench widgets & state
+  QTabWidget *mainTabs_ = nullptr;
+  QPlainTextEdit *dslEditor_ = nullptr;
+  QComboBox *exampleCombo_ = nullptr;
+  QPushButton *compileBtn_ = nullptr;
+  QCheckBox *optimizeCheck_ = nullptr;
+  QLabel *compileStatusLabel_ = nullptr;
+  QTableWidget *diagnosticsTable_ = nullptr;
+  CircuitView *circuitView_ = nullptr;
+  QPushButton *circuitResetBtn_ = nullptr;
+  QPushButton *circuitStepBackBtn_ = nullptr;
+  QPushButton *circuitStepFwdBtn_ = nullptr;
+  QPushButton *circuitPlayBtn_ = nullptr;
+  QPushButton *circuitPauseBtn_ = nullptr;
+  QSlider *circuitStepSlider_ = nullptr;
+  QLabel *circuitStepLabel_ = nullptr;
+  QRadioButton *viewOptimizedRadio_ = nullptr;
+  QRadioButton *viewRawRadio_ = nullptr;
+  QLabel *circuitStageLabel_ = nullptr;
+  QLabel *circuitMetricsLabel_ = nullptr;
+  QLabel *circuitMeasurementBanner_ = nullptr;
+  QTableWidget *circuitStateTable_ = nullptr;
+  QTimer circuitPlayTimer_;
+  QTimer dslDebounceTimer_;
+  compiler::CompilationResult lastCompilation_;
+  std::unique_ptr<SimulationSession> circuitSession_;
+  bool isCompiling_ = false;
 };
 
 } // namespace
