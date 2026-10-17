@@ -95,10 +95,16 @@ int QubitHamiltonian::qubitCount() const { return qubitCount_; }
 
 const std::vector<PauliTerm> &QubitHamiltonian::terms() const { return terms_; }
 
-double QubitHamiltonian::expectation(const Simulator &simulator) const {
+double QubitHamiltonian::expectation(
+    const std::vector<std::complex<double>> &state
+) const {
   double energy = 0.0;
   for (const PauliTerm &term : terms_) {
-    energy += term.coefficient * simulator.expectation(term.operators);
+    energy += term.coefficient * pauliExpectation(state, term.operators);
   }
   return energy;
+}
+
+double QubitHamiltonian::expectation(const Simulator &simulator) const {
+  return expectation(simulator.stateVector());
 }

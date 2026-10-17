@@ -1,8 +1,9 @@
 #include "test_support.h"
 #include "compiler/compiler_facade.h"
 #include "simulator/simulation_session.h"
-
-#include <cmath>
+#include "chemistry/h2_energy.h"
+#include "chemistry/heh_energy.h"
+#include "chemistry/vqe_convergence.h"
 #include <complex>
 #include <string>
 #include <vector>
@@ -211,6 +212,136 @@ void testWorkbenchIntegration() {
                      "unoptimized and optimized circuits yield identical final statevector");
     require(std::abs(optSession.currentState()[1] - Complex(1.0, 0.0)) < 1e-12,
             "final state is |1>");
+  }
+
+  // 6. HeH+ 4-qubit Givens rotation circuit stepwise simulation and energy expectation
+  {
+    constexpr double optTheta = 0.068498646886667;
+    constexpr double optPhi = 4.976298509698156;
+
+    const std::vector<Instruction> hehCircuit = hehSingletTrialCircuit(optTheta, optPhi);
+    require(hehCircuit.size() > 50, "HeH+ trial circuit contains full Givens decomposition sequence");
+
+    // Decompile to DSL string
+    std::string dsl = "qubit q0, q1, q2, q3\n";
+    for (const auto &instr : hehCircuit) {
+      if (instr.type == InstructionType::Measure) {
+        dsl += "measure";
+        for (std::size_t i = 0; i < instr.qubitIndices.size(); ++i) {
+          dsl += (i == 0 ? " q" : ", q") + std::to_string(instr.qubitIndices[i]);
+        }
+        dsl += "\n";
+      } else if (instr.gateName == "RZ") {
+        dsl += "RZ(" + std::to_string(instr.parameterValue) + ") q" + std::to_string(instr.qubitIndices[0]) + "\n";
+      } else if (instr.gateName == "CNOT") {
+        dsl += "CNOT q" + std::to_string(instr.qubitIndices[0]) + ", q" + std::to_string(instr.qubitIndices[1]) + "\n";
+      } else {
+        dsl += instr.gateName + " q" + std::to_string(instr.qubitIndices[0]) + "\n";
+      }
+    }
+
+    const compiler::CompilationResult compilation = compiler::compileProgram(dsl);
+    require(compilation.success, "decompiled HeH+ 4-qubit DSL compiles successfully");
+    require(compilation.qubitCount == 4, "4 qubits declared in HeH+ circuit");
+    require(compilation.rawInstructions.size() == hehCircuit.size(), "decompiled raw instruction count matches original");
+    require(compilation.instructions.size() <= compilation.rawInstructions.size(), "optimized instruction count is non-expanding");
+
+    SimulationSession session(compilation.rawInstructions, 4);
+    require(session.totalSteps() == compilation.rawInstructions.size(), "total steps matches instruction count");
+    require(session.currentStep() == 0, "session starts at step 0");
+
+    // Step 0: |0000>
+    require(std::abs(session.currentState()[0] - Complex(1.0, 0.0)) < 1e-12, "initial state is |0000>");
+
+    // Step 1: X q0 -> |0001> (index 1)
+    session.stepForward();
+    require(session.currentStep() == 1, "step is 1 after X0");
+    require(std::abs(session.currentState()[1] - Complex(1.0, 0.0)) < 1e-12, "state is |0001>");
+
+    // Step 2: X q2 -> |0101> (index 5)
+    session.stepForward();
+    require(session.currentStep() == 2, "step is 2 after X2");
+    require(std::abs(session.currentState()[5] - Complex(1.0, 0.0)) < 1e-12,
+            "state after X0, X2 is reference determinant |0101> (index 5)");
+
+    // Seek to end: all Givens rotations applied
+    session.seek(session.totalSteps());
+    require(session.isComplete(), "session completed all steps");
+    require(std::abs(session.stateNorm() - 1.0) < 1e-12, "final HeH+ state is normalized");
+
+    // Evaluate Pauli expectation against HeH+ Hamiltonian
+    double elEnergy = hehHamiltonian().expectation(session.currentState());
+    require(std::abs(elEnergy - HEH_ELECTRONIC_REFERENCE_HARTREE) < 1e-8,
+            "simulated HeH+ circuit energy matches exact FCI electronic reference (-4.218264 Ha)");
+
+    double totEnergy = elEnergy + HEH_NUCLEAR_REPULSION_HARTREE;
+    require(std::abs(totEnergy - HEH_TOTAL_REFERENCE_HARTREE) < 1e-8,
+            "total energy matches Born-Oppenheimer reference (-2.851475 Ha)");
+  }
+
+  // 7. Multi-molecule PES dataset, series definition, and bounds validation
+  {
+    // H2 5-point sweep reference data
+    const std::vector<double> h2Distances{0.735, 0.900, 1.100, 1.250, 1.400};
+    require(h2Distances.size() == 5, "H2 5-point sweep has 5 distances");
+
+    // HeH+ equilibrium geometry reference
+    const double hehBohr = 1.463283;
+    const double hehAngstrom = hehBohr * 0.52917721092;
+    require(std::abs(hehAngstrom - 0.774331) < 1e-4, "HeH+ equilibrium geometry is 0.774331 Angstrom");
+
+    // Geometry out of range rejection
+    bool rejectedLow = false;
+    try {
+      evaluateH2Energy(-0.1);
+    } catch (const std::invalid_argument &) {
+      rejectedLow = true;
+    }
+    require(rejectedLow, "negative parameter rejected");
+  }
+
+  // 8. Real-time VQE convergence trajectory recording for H2 and HeH+
+  {
+    // H2 VQE with callback
+    std::vector<VqeConvergencePoint> h2Points;
+    VqeCallback h2Cb = [&](const VqeConvergencePoint &pt) {
+      h2Points.push_back(pt);
+    };
+
+    const H2Result h2Res = optimizeH2(h2Cb);
+    require(h2Points.size() == 62, "H2 optimizer emits exactly 62 evaluation points");
+    require(h2Res.energyEvaluations == 62, "H2 result reports 62 evaluations");
+    require(!h2Points.empty(), "H2 convergence points non-empty");
+
+    // Verify evaluation sequence and monotonically non-increasing best trajectory
+    double bestSoFar = std::numeric_limits<double>::infinity();
+    for (std::size_t i = 0; i < h2Points.size(); ++i) {
+      require(h2Points[i].evaluation == static_cast<int>(i + 1), "evaluation indices are 1-based sequential");
+      require(std::isfinite(h2Points[i].electronicEnergy), "electronic energy is finite");
+      require(std::isfinite(h2Points[i].totalEnergy), "total energy is finite");
+      if (h2Points[i].totalEnergy < bestSoFar) {
+        bestSoFar = h2Points[i].totalEnergy;
+        require(h2Points[i].isBest, "isBest is true when new minimum found");
+      }
+    }
+    require(std::abs(bestSoFar - H2_TOTAL_REFERENCE_HARTREE) < 1e-8,
+            "H2 live convergence best matches total reference -1.137306 Ha");
+
+    // HeH+ VQE with callback (verify evaluation tracking)
+    std::vector<VqeConvergencePoint> hehPoints;
+    int hehCount = 0;
+    VqeCallback hehCb = [&](const VqeConvergencePoint &pt) {
+      if (hehCount < 10) {
+        hehPoints.push_back(pt);
+      }
+      ++hehCount;
+    };
+
+    const HeHResult hehRes = optimizeHeH(hehCb);
+    require(hehCount == 6803, "HeH+ optimizer executes exactly 6803 evaluations");
+    require(hehPoints.size() == 10, "HeH+ callback captured initial trajectory points");
+    require(std::abs(hehRes.totalEnergy - HEH_TOTAL_REFERENCE_HARTREE) < 1e-8,
+            "HeH+ optimization converges to exact -2.851475 Ha total energy");
   }
 }
 

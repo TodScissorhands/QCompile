@@ -284,7 +284,7 @@ double exactHeHSingletEnergy() {
   return lowestSymmetricEigenvalue(singletMatrix());
 }
 
-HeHResult optimizeHeH() {
+HeHResult optimizeHeH(VqeCallback callback) {
   const double exactEnergy = exactHeHSingletEnergy();
   if (std::abs(exactEnergy - HEH_ELECTRONIC_REFERENCE_HARTREE) >
       kReferenceTolerance) {
@@ -292,12 +292,30 @@ HeHResult optimizeHeH() {
   }
 
   int evaluations = 0;
+  double overallBestEnergy = std::numeric_limits<double>::infinity();
+
   auto energy = [&](double theta, double phi) {
     if (evaluations >= kMaximumEvaluations) {
       throw std::runtime_error("HeH+ optimizer exceeded its evaluation limit");
     }
     ++evaluations;
-    return evaluateHeHEnergy(theta, wrapPhi(phi));
+    const double phiWrapped = wrapPhi(phi);
+    const double val = evaluateHeHEnergy(theta, phiWrapped);
+    const bool isBest = (val < overallBestEnergy);
+    if (isBest) {
+      overallBestEnergy = val;
+    }
+    if (callback) {
+      callback({
+          evaluations,
+          theta,
+          phiWrapped,
+          val,
+          val + HEH_NUCLEAR_REPULSION_HARTREE,
+          isBest
+      });
+    }
+    return val;
   };
   double bestTheta = 0.0;
   double bestPhi = 0.0;

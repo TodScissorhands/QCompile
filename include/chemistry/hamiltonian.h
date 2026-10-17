@@ -26,7 +26,7 @@ public:
   int qubitCount() const;
   const std::vector<PauliTerm> &terms() const;
   double expectation(const Simulator &simulator) const;
-
+  double expectation(const std::vector<std::complex<double>> &state) const;
 private:
   int qubitCount_;
   std::vector<PauliTerm> terms_;

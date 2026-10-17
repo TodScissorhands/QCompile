@@ -95,21 +95,43 @@ double exactH2GroundEnergy() {
   return lowestSymmetricEigenvalue(buildMatrix());
 }
 
-H2Result optimizeH2() {
+H2Result optimizeH2(VqeCallback callback) {
   const double exactEnergy = exactH2GroundEnergy();
   if (std::abs(exactEnergy - H2_ELECTRONIC_REFERENCE_HARTREE) >
       kReferenceTolerance) {
     throw std::runtime_error("H2 exact energy does not match the documented reference");
   }
 
+  int evaluations = 0;
+  double bestEnergy = std::numeric_limits<double>::infinity();
+
+  auto evalWithCallback = [&](double p) {
+    const double elEnergy = evaluateH2Energy(p);
+    ++evaluations;
+    const bool isBest = (elEnergy < bestEnergy);
+    if (isBest) {
+      bestEnergy = elEnergy;
+    }
+    if (callback) {
+      callback({
+          evaluations,
+          p,
+          0.0,
+          elEnergy,
+          elEnergy + H2_NUCLEAR_REPULSION_HARTREE,
+          isBest
+      });
+    }
+    return elEnergy;
+  };
+
   constexpr double inverseGoldenRatio = 0.6180339887498948482;
   double lower = 0.0;
   double upper = kPi / 2.0;
   double left = upper - inverseGoldenRatio * (upper - lower);
   double right = lower + inverseGoldenRatio * (upper - lower);
-  double leftEnergy = evaluateH2Energy(left);
-  double rightEnergy = evaluateH2Energy(right);
-  int evaluations = 2;
+  double leftEnergy = evalWithCallback(left);
+  double rightEnergy = evalWithCallback(right);
   int iterations = 0;
 
   while (upper - lower > kSearchTolerance &&
@@ -119,15 +141,13 @@ H2Result optimizeH2() {
       right = left;
       rightEnergy = leftEnergy;
       left = upper - inverseGoldenRatio * (upper - lower);
-      leftEnergy = evaluateH2Energy(left);
-      ++evaluations;
+      leftEnergy = evalWithCallback(left);
     } else {
       lower = left;
       left = right;
       leftEnergy = rightEnergy;
       right = lower + inverseGoldenRatio * (upper - lower);
-      rightEnergy = evaluateH2Energy(right);
-      ++evaluations;
+      rightEnergy = evalWithCallback(right);
     }
     ++iterations;
   }
@@ -136,8 +156,7 @@ H2Result optimizeH2() {
   }
 
   const double parameter = 0.5 * (lower + upper);
-  const double electronicEnergy = evaluateH2Energy(parameter);
-  ++evaluations;
+  const double electronicEnergy = evalWithCallback(parameter);
   if (std::abs(electronicEnergy - exactEnergy) > 1e-10) {
     throw std::runtime_error("Optimized H2 state failed exact-energy validation");
   }

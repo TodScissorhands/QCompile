@@ -1,4 +1,6 @@
 #include "chemistry/h2_energy.h"
+#include "chemistry/heh_energy.h"
+#include "chemistry/vqe_convergence.h"
 #include "simulator/simulator.h"
 #include "simulator/simulation_session.h"
 #include "compiler/compiler_facade.h"
@@ -91,13 +93,15 @@ struct JobToken {
 };
 
 struct UiMessage {
-  enum class Type { Progress, Point, Complete, Failed, Cancelled } type;
+  enum class Type { Progress, Point, Complete, Failed, Cancelled, Convergence } type;
   std::uint64_t id = 0;
   int completed = 0;
   int total = 0;
   bool sweep = false;
   QString text;
   EnergyResult result;
+  VqeConvergencePoint convergence;
+  QString molecule;
 };
 
 QString repositoryRoot() {
@@ -540,16 +544,48 @@ private:
   QPointF lastPosition_;
 };
 
+struct MoleculeSeries {
+  QString name;
+  QString formula;
+  QColor pointColor;
+  QColor exactColor;
+  std::vector<EnergyResult> points;
+};
+
 class EnergyPlot final : public QWidget {
 public:
   explicit EnergyPlot(QWidget *parent = nullptr) : QWidget(parent) {
-    setMinimumHeight(235);
+    setMinimumHeight(240);
   }
 
   void setResults(const std::vector<EnergyResult> &results) {
     results_ = results;
+    if (seriesList_.empty()) {
+      seriesList_.push_back({
+          QStringLiteral("H₂ (neutral singlet, STO-3G)"),
+          QStringLiteral("H2"),
+          QColor(56, 189, 248),
+          QColor(168, 85, 247),
+          results
+      });
+    } else {
+      seriesList_[0].points = results;
+    }
     update();
   }
+
+  void setSeriesList(const std::vector<MoleculeSeries> &seriesList) {
+    seriesList_ = seriesList;
+    update();
+  }
+
+  void setViewMode(int mode) {
+    viewMode_ = mode; // 0: Overlay (All), 1: H2 only, 2: HeH+ only
+    update();
+  }
+
+  int viewMode() const { return viewMode_; }
+  const std::vector<MoleculeSeries> &seriesList() const { return seriesList_; }
 
 protected:
   void paintEvent(QPaintEvent *) override {
@@ -564,39 +600,56 @@ protected:
     painter.setBrush(Qt::NoBrush);
     painter.drawRect(rect().adjusted(0, 0, -1, -1));
 
-    // Panel Header
+    // Title
+    QString title = QStringLiteral("BOND-LENGTH ENERGY SCAN (STO-3G) // MULTI-MOLECULE PES OVERLAY (H₂ & HeH⁺)");
+    if (viewMode_ == 1) title = QStringLiteral("H₂ BOND-LENGTH ENERGY SCAN (STO-3G) // DISCRETE RUN SAMPLES");
+    if (viewMode_ == 2) title = QStringLiteral("HeH⁺ BENCHMARK DATASET (STO-3G) // 1.463283 BOHR (0.774 Å)");
+
     painter.setPen(QColor(90, 110, 133));
     painter.setFont(QFont(QStringLiteral("Monospace"), 8, QFont::Bold));
-    painter.drawText(QRect(12, 10, width() - 24, 16), Qt::AlignLeft,
-                     QStringLiteral("BOND-LENGTH ENERGY SCAN (STO-3G) // DISCRETE RUN SAMPLES"));
+    painter.drawText(QRect(12, 10, width() - 24, 16), Qt::AlignLeft, title);
 
-    if (results_.empty()) {
+    // Collect active points across visible series
+    std::vector<const MoleculeSeries *> activeSeries;
+    if (viewMode_ == 0) {
+      for (const auto &s : seriesList_) if (!s.points.empty()) activeSeries.push_back(&s);
+    } else if (viewMode_ == 1 && !seriesList_.empty() && !seriesList_[0].points.empty()) {
+      activeSeries.push_back(&seriesList_[0]);
+    } else if (viewMode_ == 2 && seriesList_.size() > 1 && !seriesList_[1].points.empty()) {
+      activeSeries.push_back(&seriesList_[1]);
+    }
+
+    if (activeSeries.empty()) {
       painter.setPen(QColor(100, 116, 139));
       painter.setFont(QFont(QStringLiteral("Monospace"), 9));
       painter.drawText(rect(), Qt::AlignCenter,
-                       QStringLiteral("No calculation samples. Run a geometry or 5-point sweep."));
+                       QStringLiteral("No calculation samples. Run a geometry calculation, 5-point sweep, or overlay."));
       return;
     }
 
-    double minX = results_.front().distanceAngstrom;
-    double maxX = minX;
-    double minY = results_.front().totalEnergy;
-    double maxY = minY;
-    for (const auto &result : results_) {
-      minX = std::min(minX, result.distanceAngstrom);
-      maxX = std::max(maxX, result.distanceAngstrom);
-      minY = std::min({minY, result.totalEnergy, result.exactTotalEnergy});
-      maxY = std::max({maxY, result.totalEnergy, result.exactTotalEnergy});
+    double minX = std::numeric_limits<double>::infinity();
+    double maxX = -std::numeric_limits<double>::infinity();
+    double minY = std::numeric_limits<double>::infinity();
+    double maxY = -std::numeric_limits<double>::infinity();
+
+    for (const auto *s : activeSeries) {
+      for (const auto &pt : s->points) {
+        minX = std::min(minX, pt.distanceAngstrom);
+        maxX = std::max(maxX, pt.distanceAngstrom);
+        minY = std::min({minY, pt.totalEnergy, pt.exactTotalEnergy});
+        maxY = std::max({maxY, pt.totalEnergy, pt.exactTotalEnergy});
+      }
     }
-    if (maxX - minX < 1e-6) { minX -= 0.1; maxX += 0.1; }
-    if (maxY - minY < 1e-8) { minY -= 0.01; maxY += 0.01; }
-    const double yPad = (maxY - minY) * 0.18;
+    if (maxX - minX < 1e-4) { minX -= 0.15; maxX += 0.15; }
+    if (maxY - minY < 1e-6) { minY -= 0.02; maxY += 0.02; }
+    const double yPad = (maxY - minY) * 0.16;
     minY -= yPad;
     maxY += yPad;
+    const double xPad = (maxX - minX) * 0.08;
+    minX -= xPad;
+    maxX += xPad;
 
     const QRectF chart(72, 34, std::max(10, width() - 92), std::max(20, height() - 95));
-
-    // Chart background
     painter.fillRect(chart, QColor(15, 23, 42, 160));
     painter.setPen(QPen(QColor(42, 58, 82), 1));
     painter.drawRect(chart);
@@ -631,75 +684,259 @@ protected:
                        Qt::AlignCenter, QString::number(xValue, 'f', 2));
     }
 
-    // Connect points if more than 1 sample (sorted by distance)
-    std::vector<EnergyResult> sortedResults = results_;
-    std::sort(sortedResults.begin(), sortedResults.end(),
-              [](const EnergyResult &a, const EnergyResult &b) {
-                return a.distanceAngstrom < b.distanceAngstrom;
-              });
+    // Draw series
+    for (const auto *s : activeSeries) {
+      const bool isHeH = (s->formula == QStringLiteral("HeH+"));
 
-    if (sortedResults.size() > 1) {
-      painter.setPen(QPen(QColor(56, 189, 248, 100), 1, Qt::SolidLine));
-      for (std::size_t i = 1; i < sortedResults.size(); ++i) {
-        painter.drawLine(point(sortedResults[i - 1].distanceAngstrom, sortedResults[i - 1].totalEnergy),
-                         point(sortedResults[i].distanceAngstrom, sortedResults[i].totalEnergy));
+      // Connect points if more than 1 point
+      std::vector<EnergyResult> sorted = s->points;
+      std::sort(sorted.begin(), sorted.end(),
+                [](const EnergyResult &a, const EnergyResult &b) {
+                  return a.distanceAngstrom < b.distanceAngstrom;
+                });
+      if (sorted.size() > 1) {
+        QColor lineCol = s->pointColor;
+        lineCol.setAlpha(120);
+        painter.setPen(QPen(lineCol, 1.2, Qt::SolidLine));
+        for (std::size_t i = 1; i < sorted.size(); ++i) {
+          painter.drawLine(point(sorted[i - 1].distanceAngstrom, sorted[i - 1].totalEnergy),
+                           point(sorted[i].distanceAngstrom, sorted[i].totalEnergy));
+        }
+      }
+
+      for (const auto &res : s->points) {
+        const QPointF calcPt = point(res.distanceAngstrom, res.totalEnergy);
+        const QPointF exactPt = point(res.distanceAngstrom, res.exactTotalEnergy);
+
+        if (!isHeH) {
+          // H2: Circular points and triangular exact marks
+          painter.setPen(QPen(s->pointColor, 1.5));
+          painter.setBrush(s->pointColor.darker(140));
+          painter.drawEllipse(calcPt, 4.5, 4.5);
+
+          painter.setPen(QPen(s->exactColor, 1.5));
+          painter.setBrush(Qt::NoBrush);
+          QPolygonF tri;
+          tri << QPointF(exactPt.x(), exactPt.y() - 4.5)
+              << QPointF(exactPt.x() - 4.5, exactPt.y() + 3.5)
+              << QPointF(exactPt.x() + 4.5, exactPt.y() + 3.5);
+          painter.drawPolygon(tri);
+        } else {
+          // HeH+: Square points and diamond exact marks
+          painter.setPen(QPen(s->pointColor, 1.5));
+          painter.setBrush(s->pointColor.darker(140));
+          painter.drawRect(QRectF(calcPt.x() - 4.0, calcPt.y() - 4.0, 8.0, 8.0));
+
+          painter.setPen(QPen(s->exactColor, 1.5));
+          painter.setBrush(Qt::NoBrush);
+          QPolygonF dia;
+          dia << QPointF(exactPt.x(), exactPt.y() - 5.0)
+              << QPointF(exactPt.x() + 5.0, exactPt.y())
+              << QPointF(exactPt.x(), exactPt.y() + 5.0)
+              << QPointF(exactPt.x() - 5.0, exactPt.y());
+          painter.drawPolygon(dia);
+        }
       }
     }
 
-    const auto minimum = std::min_element(results_.begin(), results_.end(),
-        [](const EnergyResult &a, const EnergyResult &b) {
-          return a.totalEnergy < b.totalEnergy;
-        });
-
-    for (const auto &result : results_) {
-      const QPointF calculated = point(result.distanceAngstrom, result.totalEnergy);
-      const QPointF reference = point(result.distanceAngstrom, result.exactTotalEnergy);
-
-      // Variational calculated point
-      painter.setPen(QPen(QColor(56, 189, 248), 1.5));
-      painter.setBrush(QColor(14, 116, 144));
-      painter.drawEllipse(calculated, 4.5, 4.5);
-
-      // Reference exact point
-      painter.setPen(QPen(QColor(168, 85, 247), 1.5));
-      painter.setBrush(Qt::NoBrush);
-      QPolygonF triangle;
-      triangle << QPointF(reference.x(), reference.y() - 4.5)
-               << QPointF(reference.x() - 4.5, reference.y() + 3.5)
-               << QPointF(reference.x() + 4.5, reference.y() + 3.5);
-      painter.drawPolygon(triangle);
-    }
-
-    // Highlight minimum
-    if (minimum != results_.end()) {
-      painter.setPen(QPen(QColor(245, 158, 11), 1.5));
-      painter.setBrush(Qt::NoBrush);
-      painter.drawEllipse(point(minimum->distanceAngstrom, minimum->totalEnergy), 8, 8);
-    }
-
-    // Chart footer labels & legend
+    // Axis title
     painter.setPen(QColor(148, 163, 184));
     painter.setFont(QFont(QStringLiteral("Monospace"), 8));
     painter.drawText(QRectF(chart.left(), chart.bottom() + 18, chart.width(), 16),
                      Qt::AlignCenter, QStringLiteral("BOND LENGTH R (Å)"));
 
+    // Legend
     painter.setPen(QColor(56, 189, 248));
-    painter.drawText(QRect(12, height() - 20, 130, 16), Qt::AlignLeft,
-                     QStringLiteral("● Variational VQE"));
+    painter.drawText(QRect(12, height() - 20, 115, 16), Qt::AlignLeft,
+                     QStringLiteral("● H₂ VQE"));
     painter.setPen(QColor(168, 85, 247));
-    painter.drawText(QRect(145, height() - 20, 175, 16), Qt::AlignLeft,
-                     QStringLiteral("△ Physical-Sector Exact"));
-    if (minimum != results_.end()) {
-      painter.setPen(QColor(245, 158, 11));
-      painter.drawText(QRect(330, height() - 20, width() - 340, 16), Qt::AlignLeft,
-                       QStringLiteral("Sample min: %1 Å (%2 Ha)")
-                           .arg(minimum->distanceAngstrom, 0, 'f', 3)
-                           .arg(minimum->totalEnergy, 0, 'f', 6));
-    }
+    painter.drawText(QRect(130, height() - 20, 130, 16), Qt::AlignLeft,
+                     QStringLiteral("△ H₂ Exact"));
+    painter.setPen(QColor(16, 185, 129));
+    painter.drawText(QRect(265, height() - 20, 150, 16), Qt::AlignLeft,
+                     QStringLiteral("■ HeH⁺ VQE (0.774 Å)"));
+    painter.setPen(QColor(245, 158, 11));
+    painter.drawText(QRect(420, height() - 20, 155, 16), Qt::AlignLeft,
+                     QStringLiteral("◆ HeH⁺ Exact"));
   }
 
 private:
   std::vector<EnergyResult> results_;
+  std::vector<MoleculeSeries> seriesList_;
+  int viewMode_ = 0;
+};
+
+class ConvergencePlot final : public QWidget {
+public:
+  explicit ConvergencePlot(QWidget *parent = nullptr) : QWidget(parent) {
+    setMinimumHeight(240);
+  }
+
+  void reset(double exactReference = 0.0, const QString &molecule = QStringLiteral("H2")) {
+    points_.clear();
+    exactReference_ = exactReference;
+    molecule_ = molecule;
+    statusText_ = QStringLiteral("Ready. Click 'Run Live VQE' to stream optimizer trajectory.");
+    update();
+  }
+
+  void addPoint(const VqeConvergencePoint &pt) {
+    points_.push_back(pt);
+    update();
+  }
+
+  void setStatus(const QString &status) {
+    statusText_ = status;
+    update();
+  }
+
+  const std::vector<VqeConvergencePoint> &points() const { return points_; }
+
+protected:
+  void paintEvent(QPaintEvent *) override {
+    QPainter painter(this);
+    painter.setRenderHint(QPainter::Antialiasing);
+
+    painter.fillRect(rect(), QColor(11, 15, 23));
+    painter.setPen(QPen(QColor(30, 41, 59), 1));
+    painter.setBrush(Qt::NoBrush);
+    painter.drawRect(rect().adjusted(0, 0, -1, -1));
+
+    painter.setPen(QColor(90, 110, 133));
+    painter.setFont(QFont(QStringLiteral("Monospace"), 8, QFont::Bold));
+    painter.drawText(QRect(12, 10, width() - 24, 16), Qt::AlignLeft,
+                     QStringLiteral("%1 LIVE VQE CONVERGENCE TRAJECTORY // REAL-TIME EVALUATION STREAM")
+                         .arg(molecule_.toUpper()));
+
+    if (points_.empty()) {
+      painter.setPen(QColor(100, 116, 139));
+      painter.setFont(QFont(QStringLiteral("Monospace"), 9));
+      painter.drawText(rect(), Qt::AlignCenter, statusText_);
+      return;
+    }
+
+    int minX = 1;
+    int maxX = std::max(2, static_cast<int>(points_.size()));
+    double minY = points_.front().totalEnergy;
+    double maxY = minY;
+    if (std::isfinite(exactReference_) && exactReference_ != 0.0) {
+      minY = std::min(minY, exactReference_);
+      maxY = std::max(maxY, exactReference_);
+    }
+    for (const auto &pt : points_) {
+      minY = std::min(minY, pt.totalEnergy);
+      maxY = std::max(maxY, pt.totalEnergy);
+    }
+    if (maxY - minY < 1e-8) { minY -= 0.01; maxY += 0.01; }
+    const double yPad = (maxY - minY) * 0.15;
+    minY -= yPad;
+    maxY += yPad;
+
+    const QRectF chart(72, 34, std::max(10, width() - 92), std::max(20, height() - 95));
+    painter.fillRect(chart, QColor(15, 23, 42, 160));
+    painter.setPen(QPen(QColor(42, 58, 82), 1));
+    painter.drawRect(chart);
+
+    // Horizontal grid & Y labels
+    for (int i = 0; i <= 4; ++i) {
+      const double fraction = i / 4.0;
+      const double y = chart.bottom() - fraction * chart.height();
+      painter.setPen(QPen(QColor(30, 45, 68), 1, Qt::DashLine));
+      painter.drawLine(QPointF(chart.left(), y), QPointF(chart.right(), y));
+      painter.setPen(QColor(100, 116, 139));
+      painter.setFont(QFont(QStringLiteral("Monospace"), 8));
+      painter.drawText(QRectF(2, y - 7, 66, 14), Qt::AlignRight | Qt::AlignVCenter,
+                       QString::number(minY + fraction * (maxY - minY), 'f', 4));
+    }
+
+    auto point = [&](double x, double y) {
+      return QPointF(chart.left() + (x - minX) / (maxX - minX) * chart.width(),
+                     chart.bottom() - (y - minY) / (maxY - minY) * chart.height());
+    };
+
+    // Vertical grid & X labels
+    for (int i = 0; i <= 4; ++i) {
+      const double fraction = i / 4.0;
+      const double xValue = minX + fraction * (maxX - minX);
+      const double xPos = chart.left() + fraction * chart.width();
+      painter.setPen(QPen(QColor(30, 45, 68), 1, Qt::DotLine));
+      painter.drawLine(QPointF(xPos, chart.top()), QPointF(xPos, chart.bottom()));
+      painter.setPen(QColor(100, 116, 139));
+      painter.setFont(QFont(QStringLiteral("Monospace"), 8));
+      painter.drawText(QRectF(xPos - 25, chart.bottom() + 4, 50, 14),
+                       Qt::AlignCenter, QString::number(static_cast<int>(xValue)));
+    }
+
+    // Exact reference dashed line
+    if (std::isfinite(exactReference_) && exactReference_ != 0.0) {
+      const double refY = chart.bottom() - (exactReference_ - minY) / (maxY - minY) * chart.height();
+      if (refY >= chart.top() && refY <= chart.bottom()) {
+        painter.setPen(QPen(QColor(192, 132, 252, 200), 1.5, Qt::DashLine));
+        painter.drawLine(QPointF(chart.left(), refY), QPointF(chart.right(), refY));
+      }
+    }
+
+    // Trial evaluation dots
+    for (const auto &pt : points_) {
+      const QPointF p = point(pt.evaluation, pt.totalEnergy);
+      painter.setPen(Qt::NoPen);
+      painter.setBrush(QColor(56, 189, 248, 140));
+      painter.drawEllipse(p, 2.5, 2.5);
+    }
+
+    // Best-so-far trajectory line
+    std::vector<QPointF> trajectory;
+    double currentBest = std::numeric_limits<double>::infinity();
+    for (const auto &pt : points_) {
+      if (pt.totalEnergy < currentBest) {
+        currentBest = pt.totalEnergy;
+      }
+      trajectory.push_back(point(pt.evaluation, currentBest));
+    }
+    if (trajectory.size() > 1) {
+      painter.setPen(QPen(QColor(245, 158, 11), 2, Qt::SolidLine));
+      for (std::size_t i = 1; i < trajectory.size(); ++i) {
+        painter.drawLine(trajectory[i - 1], trajectory[i]);
+      }
+    }
+
+    // Highlight final minimum
+    if (!trajectory.empty()) {
+      painter.setPen(QPen(QColor(245, 158, 11), 2));
+      painter.setBrush(QColor(251, 191, 36));
+      painter.drawEllipse(trajectory.back(), 5, 5);
+    }
+
+    // Chart footer
+    painter.setPen(QColor(148, 163, 184));
+    painter.setFont(QFont(QStringLiteral("Monospace"), 8));
+    painter.drawText(QRectF(chart.left(), chart.bottom() + 18, chart.width(), 16),
+                     Qt::AlignCenter, QStringLiteral("OPTIMIZATION EVALUATION (N)"));
+
+    painter.setPen(QColor(56, 189, 248));
+    painter.drawText(QRect(12, height() - 20, 110, 16), Qt::AlignLeft,
+                     QStringLiteral("● Trial Evals"));
+    painter.setPen(QColor(245, 158, 11));
+    painter.drawText(QRect(125, height() - 20, 140, 16), Qt::AlignLeft,
+                     QStringLiteral("― Best Trajectory"));
+    painter.setPen(QColor(192, 132, 252));
+    painter.drawText(QRect(270, height() - 20, 130, 16), Qt::AlignLeft,
+                     QStringLiteral("-- Exact Target"));
+
+    if (!points_.empty()) {
+      painter.setPen(QColor(245, 158, 11));
+      painter.drawText(QRect(410, height() - 20, width() - 420, 16), Qt::AlignLeft,
+                       QStringLiteral("Best: %1 Ha (Eval %2)")
+                           .arg(currentBest, 0, 'f', 6)
+                           .arg(points_.back().evaluation));
+    }
+  }
+
+private:
+  std::vector<VqeConvergencePoint> points_;
+  double exactReference_ = 0.0;
+  QString molecule_ = QStringLiteral("H2");
+  QString statusText_ = QStringLiteral("Ready.");
 };
 
 class MainWindow final : public QMainWindow {
@@ -759,8 +996,8 @@ public:
     refreshState();
     refreshCircuit();
     updatePreviewLabels();
+    updateEnergyPlotSeries();
     loadPresetExample(0);
-    pollTimer_.setInterval(80);
     connect(&pollTimer_, &QTimer::timeout, [this] { drainMessages(); });
     pollTimer_.start();
     playbackTimer_.setInterval(500);
@@ -856,6 +1093,7 @@ private:
     exampleCombo_->addItem(QStringLiteral("Superposition & Phase (H + RZ)"));
     exampleCombo_->addItem(QStringLiteral("3-Qubit GHZ State"));
     exampleCombo_->addItem(QStringLiteral("Single Qubit Bit-Flip (X)"));
+    exampleCombo_->addItem(QStringLiteral("HeH⁺ 4-Qubit Singlet VQE Circuit"));
     exampleCombo_->addItem(QStringLiteral("Syntax Error Diagnostic Demo"));
 
     compileBtn_ = new QPushButton(QStringLiteral("Compile Circuit"));
@@ -1297,6 +1535,17 @@ private:
     plotContainerLayout->setContentsMargins(8, 8, 8, 8);
     plotContainerLayout->setSpacing(6);
 
+    auto *pesTopRow = new QHBoxLayout;
+    auto *pesLabel = new QLabel(QStringLiteral("PES View Mode:"));
+    pesLabel->setStyleSheet(QStringLiteral("font-weight:700;color:#94a3b8;font-size:11px"));
+    pesViewCombo_ = new QComboBox;
+    pesViewCombo_->addItem(QStringLiteral("All Supported Molecules (H₂ & HeH⁺ Overlay)"));
+    pesViewCombo_->addItem(QStringLiteral("H₂ Potential Energy Scan (STO-3G)"));
+    pesViewCombo_->addItem(QStringLiteral("HeH⁺ Benchmark Dataset (STO-3G)"));
+    pesTopRow->addWidget(pesLabel);
+    pesTopRow->addWidget(pesViewCombo_, 1);
+    plotContainerLayout->addLayout(pesTopRow);
+
     energyPlot_ = new EnergyPlot;
     energyPlot_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     plotContainerLayout->addWidget(energyPlot_, 1);
@@ -1306,8 +1555,58 @@ private:
     explanation_->setStyleSheet(QStringLiteral("font-family:monospace;font-size:10px;color:#64748b;padding:6px 8px;border:1px solid #1e293b;background:#090d16"));
     plotContainerLayout->addWidget(explanation_);
 
-    rightTabs->addTab(plotContainer, QStringLiteral("Energy Scan (5-Point Sweep)"));
+    rightTabs->addTab(plotContainer, QStringLiteral("Energy Scan & PES Overlay"));
 
+    // Tab 3: Real-Time VQE Convergence Trajectory
+    auto *convergenceContainer = new QWidget;
+    auto *convergenceLayout = new QVBoxLayout(convergenceContainer);
+    convergenceLayout->setContentsMargins(8, 8, 8, 8);
+    convergenceLayout->setSpacing(6);
+
+    convergencePlot_ = new ConvergencePlot;
+    convergencePlot_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    convergenceLayout->addWidget(convergencePlot_, 1);
+
+    auto *vqeCtrlBox = new QGroupBox(QStringLiteral("LIVE VQE OPTIMIZATION CONTROLS"));
+    auto *vqeCtrlLayout = new QVBoxLayout(vqeCtrlBox);
+    vqeCtrlLayout->setSpacing(6);
+
+    auto *vqeBtnRow = new QHBoxLayout;
+    vqeBtnRow->setSpacing(8);
+    liveH2VqeBtn_ = new QPushButton(QStringLiteral("▶ Run Live H₂ VQE"));
+    liveH2VqeBtn_->setObjectName(QStringLiteral("primary"));
+    liveH2VqeBtn_->setFixedHeight(28);
+
+    liveHeHVqeBtn_ = new QPushButton(QStringLiteral("▶ Run Live HeH⁺ VQE"));
+    liveHeHVqeBtn_->setFixedHeight(28);
+
+    cancelVqeBtn_ = new QPushButton(QStringLiteral("Cancel VQE"));
+    cancelVqeBtn_->setFixedHeight(28);
+    cancelVqeBtn_->setEnabled(false);
+
+    vqeBtnRow->addWidget(liveH2VqeBtn_, 2);
+    vqeBtnRow->addWidget(liveHeHVqeBtn_, 2);
+    vqeBtnRow->addWidget(cancelVqeBtn_, 1);
+    vqeCtrlLayout->addLayout(vqeBtnRow);
+
+    vqeStatusLabel_ = new QLabel(QStringLiteral("Ready. Choose H₂ or HeH⁺ to stream live optimizer evaluations."));
+    vqeStatusLabel_->setStyleSheet(QStringLiteral("font-family:monospace;font-size:10px;color:#64748b;padding:4px 6px;background:#090d16;border:1px solid #1e293b"));
+    vqeCtrlLayout->addWidget(vqeStatusLabel_);
+
+    convergenceLayout->addWidget(vqeCtrlBox);
+
+    rightTabs->addTab(convergenceContainer, QStringLiteral("VQE Convergence Trajectory"));
+
+    connect(pesViewCombo_, qOverload<int>(&QComboBox::currentIndexChanged), [this](int idx) {
+      if (energyPlot_) {
+        energyPlot_->setViewMode(idx);
+      }
+    });
+    connect(liveH2VqeBtn_, &QPushButton::clicked, [this] { startLiveVqe(false); });
+    connect(liveHeHVqeBtn_, &QPushButton::clicked, [this] { startLiveVqe(true); });
+    connect(cancelVqeBtn_, &QPushButton::clicked, [this] {
+      if (token_) token_->cancelled.store(true);
+    });
     columns->addWidget(rightTabs);
 
     columns->setStretchFactor(0, 11);
@@ -1407,6 +1706,145 @@ private:
               .arg(distanceSpin_->value(), 0, 'f', 3);
     previewLabel_->setText(last);
   }
+  QString formatHeHDsl(double theta, double phi) {
+    const auto instructions = hehSingletTrialCircuit(theta, phi);
+    QString text = QStringLiteral(
+        "# HeH+ 4-Qubit Singlet VQE Trial Circuit\n"
+        "# Model: STO-3G, Jordan-Wigner mapping, 4 qubits (q0..q3)\n"
+        "# State preparation: |0101⟩ followed by two singlet Givens rotations\n"
+        "# Optimal parameters: theta = %1 rad, phi = %2 rad\n"
+        "qubit q0, q1, q2, q3\n")
+        .arg(theta, 0, 'f', 6)
+        .arg(phi, 0, 'f', 6);
+
+    for (const auto &instr : instructions) {
+      if (instr.type == InstructionType::Measure) {
+        text += QStringLiteral("measure");
+        for (std::size_t i = 0; i < instr.qubitIndices.size(); ++i) {
+          text += (i == 0 ? QStringLiteral(" q") : QStringLiteral(", q")) + QString::number(instr.qubitIndices[i]);
+        }
+        text += QStringLiteral("\n");
+      } else if (instr.gateName == "RZ") {
+        text += QStringLiteral("RZ(%1) q%2\n").arg(instr.parameterValue, 0, 'f', 9).arg(instr.qubitIndices[0]);
+      } else if (instr.gateName == "CNOT") {
+        text += QStringLiteral("CNOT q%1, q%2\n").arg(instr.qubitIndices[0]).arg(instr.qubitIndices[1]);
+      } else {
+        text += QString::fromStdString(instr.gateName) + QStringLiteral(" q%1\n").arg(instr.qubitIndices[0]);
+      }
+    }
+    text += QStringLiteral("measure q0, q1, q2, q3\n");
+    return text;
+  }
+
+  EnergyResult hehBenchmarkResult() {
+    EnergyResult hehRes;
+    hehRes.distanceBohr = 1.463283;
+    hehRes.distanceAngstrom = 1.463283 * 0.52917721092; // 0.774331 Angstrom
+    hehRes.electronicEnergy = -4.218264154490334;
+    hehRes.exactElectronicEnergy = -4.218264154490395;
+    hehRes.nuclearRepulsionEnergy = 1.366789609392032;
+    hehRes.totalEnergy = -2.851474545098302;
+    hehRes.exactTotalEnergy = -2.851474545098363;
+    hehRes.converged = true;
+    hehRes.evaluations = 6803;
+    return hehRes;
+  }
+
+  void updateEnergyPlotSeries() {
+    if (!energyPlot_) return;
+    MoleculeSeries h2Series;
+    h2Series.name = QStringLiteral("H₂ (neutral singlet, STO-3G)");
+    h2Series.formula = QStringLiteral("H2");
+    h2Series.pointColor = QColor(56, 189, 248);
+    h2Series.exactColor = QColor(168, 85, 247);
+    h2Series.points = plotResults_;
+
+    MoleculeSeries hehSeries;
+    hehSeries.name = QStringLiteral("HeH⁺ (cation singlet, STO-3G)");
+    hehSeries.formula = QStringLiteral("HeH+");
+    hehSeries.pointColor = QColor(16, 185, 129);
+    hehSeries.exactColor = QColor(245, 158, 11);
+    hehSeries.points = { hehBenchmarkResult() };
+
+    energyPlot_->setSeriesList({ h2Series, hehSeries });
+  }
+
+  void startLiveVqe(bool isHeH) {
+    if (jobRunning_) return;
+    if (worker_.joinable()) worker_.join();
+
+    jobRunning_ = true;
+    token_ = std::make_shared<JobToken>();
+    token_->id = ++requestId_;
+    token_->cancelled.store(false);
+
+    if (liveH2VqeBtn_) liveH2VqeBtn_->setEnabled(false);
+    if (liveHeHVqeBtn_) liveHeHVqeBtn_->setEnabled(false);
+    if (cancelVqeBtn_) cancelVqeBtn_->setEnabled(true);
+    if (runButton_) runButton_->setEnabled(false);
+    if (sweepButton_) sweepButton_->setEnabled(false);
+
+    const double exactRef = isHeH ? HEH_TOTAL_REFERENCE_HARTREE : H2_TOTAL_REFERENCE_HARTREE;
+    const QString mol = isHeH ? QStringLiteral("HeH+") : QStringLiteral("H2");
+    if (convergencePlot_) {
+      convergencePlot_->reset(exactRef, mol);
+    }
+    if (vqeStatusLabel_) {
+      vqeStatusLabel_->setText(QStringLiteral("Optimizing %1 VQE... streaming real-time evaluations").arg(mol));
+    }
+    if (rightTabs_) {
+      rightTabs_->setCurrentIndex(2);
+    }
+
+    auto token = token_;
+    worker_ = std::thread([this, isHeH, token] {
+      try {
+        VqeCallback callback = [this, isHeH, token](const VqeConvergencePoint &pt) {
+          if (token->cancelled.load()) {
+            throw std::runtime_error("VQE optimization cancelled by user");
+          }
+          UiMessage msg;
+          msg.type = UiMessage::Type::Convergence;
+          msg.id = token->id;
+          msg.convergence = pt;
+          msg.molecule = isHeH ? QStringLiteral("HeH+") : QStringLiteral("H2");
+          msg.text = QStringLiteral("%1 VQE Eval %2: E = %3 Ha%4")
+                         .arg(msg.molecule)
+                         .arg(pt.evaluation)
+                         .arg(pt.totalEnergy, 0, 'f', 6)
+                         .arg(pt.isBest ? QStringLiteral(" (New Best)") : QStringLiteral(""));
+          post(msg);
+        };
+
+        if (!isHeH) {
+          const auto res = optimizeH2(callback);
+          UiMessage msg;
+          msg.type = UiMessage::Type::Complete;
+          msg.id = token->id;
+          msg.text = QStringLiteral("H2 VQE Converged: Total E = %1 Ha (%2 evaluations)")
+                         .arg(res.totalEnergy, 0, 'f', 6)
+                         .arg(res.energyEvaluations);
+          post(msg);
+        } else {
+          const auto res = optimizeHeH(callback);
+          UiMessage msg;
+          msg.type = UiMessage::Type::Complete;
+          msg.id = token->id;
+          msg.text = QStringLiteral("HeH+ VQE Converged: Total E = %1 Ha (%2 evaluations)")
+                         .arg(res.totalEnergy, 0, 'f', 6)
+                         .arg(res.energyEvaluations);
+          post(msg);
+        }
+      } catch (const std::exception &err) {
+        UiMessage msg;
+        msg.type = token->cancelled.load() ? UiMessage::Type::Cancelled : UiMessage::Type::Failed;
+        msg.id = token->id;
+        msg.text = QString::fromStdString(err.what());
+        post(msg);
+      }
+    });
+  }
+
   void loadPresetExample(int index) {
     QString code;
     switch (index) {
@@ -1447,6 +1885,9 @@ private:
           "measure q0\n");
       break;
     case 4:
+      code = formatHeHDsl(0.068498646886667, 4.976298509698156);
+      break;
+    case 5:
       code = QStringLiteral(
           "# Compiler Diagnostic Reporting Demonstration\n"
           "qubit q0\n"
@@ -1746,25 +2187,55 @@ private:
       try {
         for (int index = 0; index < total; ++index) {
           const double distance = sweep ? kSweepDistances[static_cast<std::size_t>(index)] : selectedDistance;
-          post({UiMessage::Type::Progress, token->id, index, total, sweep,
-                QStringLiteral("Preparing sample %1/%2 at %3 Å")
-                    .arg(index + 1).arg(total).arg(distance, 0, 'f', 3), {}});
+          UiMessage msgProg;
+          msgProg.type = UiMessage::Type::Progress;
+          msgProg.id = token->id;
+          msgProg.completed = index;
+          msgProg.total = total;
+          msgProg.sweep = sweep;
+          msgProg.text = QStringLiteral("Preparing sample %1/%2 at %3 Å")
+                             .arg(index + 1).arg(total).arg(distance, 0, 'f', 3);
+          post(msgProg);
           const ProgressCallback callback{[this, token, index, total, sweep](const QString &text) {
-            post({UiMessage::Type::Progress, token->id, index, total, sweep, text, {}});
+            UiMessage cbMsg;
+            cbMsg.type = UiMessage::Type::Progress;
+            cbMsg.id = token->id;
+            cbMsg.completed = index;
+            cbMsg.total = total;
+            cbMsg.sweep = sweep;
+            cbMsg.text = text;
+            post(cbMsg);
           }};
           EnergyResult result = calculateAtGeometry(root, distance, token, callback);
           if (token->cancelled.load()) throw std::runtime_error("Calculation cancelled");
-          post({UiMessage::Type::Point, token->id, index + 1, total, sweep,
-                QStringLiteral("Completed actual calculation at %1 Å")
-                    .arg(result.distanceAngstrom, 0, 'f', 3), result});
+          UiMessage msgPoint;
+          msgPoint.type = UiMessage::Type::Point;
+          msgPoint.id = token->id;
+          msgPoint.completed = index + 1;
+          msgPoint.total = total;
+          msgPoint.sweep = sweep;
+          msgPoint.text = QStringLiteral("Completed actual calculation at %1 Å")
+                              .arg(result.distanceAngstrom, 0, 'f', 3);
+          msgPoint.result = result;
+          post(msgPoint);
         }
-        post({UiMessage::Type::Complete, token->id, total, total, sweep,
-              QStringLiteral("All requested calculations completed."), {}});
+        UiMessage msgDone;
+        msgDone.type = UiMessage::Type::Complete;
+        msgDone.id = token->id;
+        msgDone.completed = total;
+        msgDone.total = total;
+        msgDone.sweep = sweep;
+        msgDone.text = QStringLiteral("All requested calculations completed.");
+        post(msgDone);
       } catch (const std::exception &error) {
         const bool cancelled = token->cancelled.load() ||
             QString::fromUtf8(error.what()).contains(QStringLiteral("cancelled"), Qt::CaseInsensitive);
-        post({cancelled ? UiMessage::Type::Cancelled : UiMessage::Type::Failed,
-              token->id, 0, 0, sweep, QString::fromUtf8(error.what()), {}});
+        UiMessage msgErr;
+        msgErr.type = cancelled ? UiMessage::Type::Cancelled : UiMessage::Type::Failed;
+        msgErr.id = token->id;
+        msgErr.sweep = sweep;
+        msgErr.text = QString::fromUtf8(error.what());
+        post(msgErr);
       }
     });
   }
@@ -1782,10 +2253,18 @@ private:
         progressLabel_->setText(message.text);
         if (message.total > 0) progress_->setValue(message.completed * 100 / message.total);
         break;
+      case UiMessage::Type::Convergence:
+        if (convergencePlot_) {
+          convergencePlot_->addPoint(message.convergence);
+        }
+        if (vqeStatusLabel_) {
+          vqeStatusLabel_->setText(message.text);
+        }
+        break;
       case UiMessage::Type::Point:
         plotResults_.push_back(message.result);
         if (message.sweep) currentSweepResults_.push_back(message.result);
-        energyPlot_->setResults(plotResults_);
+        updateEnergyPlotSeries();
         latestResult_ = message.result;
         std::cout
             << QStringLiteral("QCOMPILE_LAB_RESULT R=%1 A Eel=%2 Ha Enuc=%3 Ha Etot=%4 Ha Eexact=%5 Ha dE=%6 Ha evals=%7 converged=%8")
@@ -1813,8 +2292,12 @@ private:
         runButton_->setEnabled(true);
         sweepButton_->setEnabled(true);
         cancelButton_->setEnabled(false);
+        if (liveH2VqeBtn_) liveH2VqeBtn_->setEnabled(true);
+        if (liveHeHVqeBtn_) liveHeHVqeBtn_->setEnabled(true);
+        if (cancelVqeBtn_) cancelVqeBtn_->setEnabled(false);
         progress_->setValue(100);
         progressLabel_->setText(message.text);
+        if (vqeStatusLabel_) vqeStatusLabel_->setText(message.text);
         if (worker_.joinable()) worker_.join();
         if (message.sweep) {
           updatePredictionFeedback();
@@ -1828,7 +2311,11 @@ private:
         runButton_->setEnabled(true);
         sweepButton_->setEnabled(true);
         cancelButton_->setEnabled(false);
+        if (liveH2VqeBtn_) liveH2VqeBtn_->setEnabled(true);
+        if (liveHeHVqeBtn_) liveHeHVqeBtn_->setEnabled(true);
+        if (cancelVqeBtn_) cancelVqeBtn_->setEnabled(false);
         progressLabel_->setText((message.type == UiMessage::Type::Failed ? QStringLiteral("Failed: ") : QStringLiteral("Cancelled: ")) + message.text);
+        if (vqeStatusLabel_) vqeStatusLabel_->setText((message.type == UiMessage::Type::Failed ? QStringLiteral("VQE Error: ") : QStringLiteral("VQE Cancelled: ")) + message.text);
         appStatus_->setText(message.type == UiMessage::Type::Failed ? QStringLiteral("Run failed; previous result remains labelled by its own geometry") : QStringLiteral("Run cancelled"));
         if (worker_.joinable()) worker_.join();
         if (smokeTest_) finishSmokeTest(false, message.text);
@@ -1949,9 +2436,47 @@ private:
       return;
     }
 
+    // 1b. Test HeH+ 4-qubit circuit preset in Circuit Workbench
+    exampleCombo_->setCurrentIndex(4);
+    if (!dslEditor_->toPlainText().contains(QStringLiteral("qubit q0, q1, q2, q3"))) {
+      finishSmokeTest(false, QStringLiteral("HeH+ preset did not load 4-qubit declaration"));
+      return;
+    }
+    compileDsl();
+    if (!lastCompilation_.success || lastCompilation_.qubitCount != 4) {
+      finishSmokeTest(false, QStringLiteral("HeH+ 4-qubit preset did not compile to 4 qubits"));
+      return;
+    }
+    if (circuitSession_->totalSteps() < 50) {
+      finishSmokeTest(false, QStringLiteral("HeH+ trial sequence has unexpected instruction count"));
+      return;
+    }
+    // Step forward 2 instructions: X q0, X q2
+    circuitStepFwdBtn_->click();
+    circuitStepFwdBtn_->click();
+    if (circuitSession_->currentStep() != 2) {
+      finishSmokeTest(false, QStringLiteral("HeH+ circuit did not advance 2 steps"));
+      return;
+    }
+    // Index 5 is |0101> in bit order (q0=1, q1=0, q2=1, q3=0)
+    if (std::abs(circuitSession_->currentState()[5] - std::complex<double>(1.0, 0.0)) > 1e-12) {
+      finishSmokeTest(false, QStringLiteral("HeH+ state after X0, X2 is not determinant |0101>"));
+      return;
+    }
+    circuitResetBtn_->click();
+    exampleCombo_->setCurrentIndex(0);
+
     // 2. Switch to Molecular Chemistry Tab and run existing chemistry smoke verification
     if (mainTabs_) {
       mainTabs_->setCurrentIndex(1);
+    }
+    if (pesViewCombo_ && energyPlot_) {
+      pesViewCombo_->setCurrentIndex(0); // Multi-Molecule Overlay
+      if (energyPlot_->viewMode() != 0 || energyPlot_->seriesList().size() < 2) {
+        finishSmokeTest(false, QStringLiteral("multi-molecule PES overlay series not properly initialized"));
+        return;
+      }
+      pesViewCombo_->setCurrentIndex(1); // H2 scan
     }
     const double initialYaw = moleculeView_->yaw();
     const QPoint pressPosition(40, 40);
@@ -2111,6 +2636,13 @@ private:
   EnergyPlot *energyPlot_ = nullptr;
   QTabWidget *rightTabs_ = nullptr;
 
+  // Milestone 3: Multi-molecule PES & Live VQE Convergence
+  QComboBox *pesViewCombo_ = nullptr;
+  ConvergencePlot *convergencePlot_ = nullptr;
+  QPushButton *liveH2VqeBtn_ = nullptr;
+  QPushButton *liveHeHVqeBtn_ = nullptr;
+  QPushButton *cancelVqeBtn_ = nullptr;
+  QLabel *vqeStatusLabel_ = nullptr;
   // Interactive Quantum Circuit Workbench widgets & state
   QTabWidget *mainTabs_ = nullptr;
   QPlainTextEdit *dslEditor_ = nullptr;

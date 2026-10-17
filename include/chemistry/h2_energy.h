@@ -3,7 +3,7 @@
 #include "chemistry/hamiltonian.h"
 #include "compiler/code_generator.h"
 #include "chemistry/h2_geometry.h"
-
+#include "chemistry/vqe_convergence.h"
 #include <array>
 
 
@@ -43,4 +43,4 @@ QubitHamiltonian h2Hamiltonian();
 double evaluateH2Energy(double parameter);
 std::array<std::array<double, 4>, 4> h2HamiltonianMatrix();
 double exactH2GroundEnergy();
-H2Result optimizeH2();
+H2Result optimizeH2(VqeCallback callback = nullptr);

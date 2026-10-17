@@ -2,7 +2,7 @@
 
 #include "compiler/code_generator.h"
 #include "chemistry/hamiltonian.h"
-
+#include "chemistry/vqe_convergence.h"
 #include <vector>
 
 struct HeHResult {
@@ -19,7 +19,7 @@ const QubitHamiltonian &hehHamiltonian();
 std::vector<Instruction> hehSingletTrialCircuit(double theta, double phi);
 double evaluateHeHEnergy(double theta, double phi);
 double exactHeHSingletEnergy();
-HeHResult optimizeHeH();
+HeHResult optimizeHeH(VqeCallback callback = nullptr);
 
 constexpr double HEH_NUCLEAR_REPULSION_HARTREE = 1.3667896093920315;
 constexpr double HEH_ELECTRONIC_REFERENCE_HARTREE = -4.218264154490385;
