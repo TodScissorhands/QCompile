@@ -132,12 +132,20 @@ Run other provided sample programs:
 ```
 
 ### 2. Regression Test Suite
-Run the standalone regression test suite:
+Run the modular regression test suite (covers lexer, parser, semantic analyzer, optimizer, simulator, and chemistry validation across 391 assertions):
 ```bash
 make test
 # or directly:
 ./qcompile_tests
 ```
+Test implementations are structured into modular units under `tests/`:
+- `tests/test_lexer.cpp`: Comment and tokenization tests
+- `tests/test_parser.cpp`: Grammar, precedence, associativity, and AST invariants
+- `tests/test_semantics.cpp`: Semantic validation, arity, and numeric safety
+- `tests/test_optimizer.cpp`: Cancellation rules and RZ rotation merging
+- `tests/test_simulator.cpp`: Statevector evolution, bitstring ordering, and measurement collapse
+- `tests/test_chemistry.cpp`: Molecular Hamiltonians, Jacobi eigensolver, and VQE convergence
+- `tests/test_support.h` / `test_support.cpp`: Shared test fixtures and assertion helpers
 
 ### 3. Molecular Chemistry Benchmarks
 Run the fixed molecular benchmarks and catalog CLI:

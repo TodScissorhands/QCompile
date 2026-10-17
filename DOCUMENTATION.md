@@ -127,7 +127,7 @@ APPLY H [0]
 APPLY CNOT [0, 1]
 MEASURE [0, 1]
 
-Probabilities:
+Pre-measurement probabilities:
   00: 0.500000
   11: 0.500000
 Result: 11
@@ -471,3 +471,104 @@ Each calculation creates a private `QTemporaryDir`, invokes the existing offline
 The five-point sweep uses fresh generator/solver runs at 0.735, 0.900, 1.100, 1.250, and 1.400 Å. The plot displays only actual calculated total-energy points and corresponding physical-sector exact-reference points; it does not draw an interpolated curve. The guided prediction compares the two endpoint totals and identifies the minimum only among the sweep’s sampled geometries. The one-parameter ansatz is not claimed to remain accurate throughout dissociation.
 
 `./qcompile_lab --smoke-test` exercises camera rotation/zoom, bond preview updates, circuit stepping/play/pause, two individual geometry runs, and the five-point sweep, then saves a screenshot to `/tmp/qcompile-lab-smoke.png` without overwriting an existing file. Optional executable overrides are `QCOMPILE_LAB_PYTHON`, `QCOMPILE_LAB_GENERATOR`, and `QCOMPILE_LAB_BENCHMARKS`. The app adds no chemistry-package runtime dependency, web frontend, or support for molecules other than H₂.
+## 13. Hardening Milestone Phase Register & Roadmaps
+
+### 13.1 Phase Register Status
+
+| Phase | Milestone Objective | Status | Completed Work / Scope | Reported Verification Summary |
+| :--- | :--- | :--- | :--- | :--- |
+| **Phase 0** | Baseline & Regression Audit | **Accepted** | Baseline branch, HEAD, commit `150ea3f5`, working tree inspection; reproduction of all 12 reported audit defects without repository modifications. | 241 assertions passed; ASan/UBSan clean; clean build reproduced. |
+| **Phase 1** | Numeric Safety & Diagnostics | **Accepted** | Wrapped `std::stod` in `try...catch` for `std::out_of_range` & `std::invalid_argument`; rejected non-finite values in unary/binary evaluation; context-accurate division-by-zero reporting in `let` vs gate parameters; prevented propagation of failed variables. | *Reported verification:* 252 assertions passed (+11 assertions); ASan/UBSan clean; CLI exits 1 with line diagnostics on overflow. |
+| **Phase 2** | Build Configuration & Incremental Builds | **Accepted** | Introduced `-O2` release build default and `-g -O0` debug option (`BUILD=debug`); translation unit object compilation into `build/$(CFG)/*.o`; automatic `-MMD -MP` header dependency tracking; isolated `build/$(CFG)/bin/*` binaries with root convenience symlinks; order-only `.config_check` race prevention. | *Reported verification:* 252 assertions passed; parallel `make -j4` verified; 14.35x HeH⁺ benchmark runtime speedup; switching release/debug without `make clean` verified. |
+| **Phase 3** | `#` Line Comments | **Accepted** | Lexer support for `#` line comments continuing to `\n` or EOF; preserved statement-terminating `\n` tokens; accurate EOF column coordinate advancement past comment text; Bell-state deterministic probability equivalence. | *Reported verification:* 269 assertions passed; ASan/UBSan clean; CLI comments end-to-end verified. |
+| **Phase 4** | Parser & Expression Safety | **Accepted** | Move semantics in `parseExpression()` / `parseTerm()` eliminating $O(N^2)$ AST copies; conservative recursion depth limit `kMaxNestingDepth = 256` with RAII guard; iterative unrolling of left-skewed spines in `evaluateExpression()` and production `printExpression()` / `formatExpression()` preserving right-hand grouping; direct unit tests calling production formatter. | *Reported verification:* 300 assertions passed; `git diff --check` clean; ASan + UBSan test suite clean; ASan CLI 50,000-term run exited 0 cleanly (0 leaks, 0 stack errors); 50k terms in 0.070s; 14/14 expression printer grouping cases verified. |
+| **Phase 5** | Measurement Semantics & Output Correctness | **Accepted** | Projective measurement collapse; joint outcome sampling over measured qubits; projection onto sampled outcomes and state vector renormalization; conditional state & correlation preservation on unmeasured qubits; semantic rejection of duplicate qubits in single `measure` statements; pre-measurement probability labeling; standardized full-register basis bitstrings `q(n-1)...q0` with `q0` rightmost/LSB; operand-order measurement result mapping. | *Reported verification:* 344 assertions passed; `git diff --check` clean; ASan/UBSan clean; H₂ (-1.857275 Ha) and HeH⁺ (-4.218264 Ha) benchmarks identical to baseline. |
+| **Phase 6** | Parser Token Ownership & Lifetime Safety | **Accepted** | `Parser` holds token vector by value (`std::vector<Token>`) via move construction (`std::move`), eliminating dangling references from temporary rvalues; bounds-safe `peek()` and `advance()` guarded against empty/exhausted streams; malformed/truncated token streams missing `EndOfFile` or empty token lists rejected with clean diagnostic. | *Reported verification:* 350 assertions passed; `git diff --check` clean; ASan/UBSan clean; temporary, cross-frame, and malformed token streams verified. |
+| **Phase 7** | AST Field Initialization Safety | **Accepted** | Explicit in-class default member initializers for primitive fields in `struct Expression` (`type = NumberLiteral`, `operation = '\0'`) and `struct Statement` (`type = QubitDeclaration`, `line = 0`, `hasParameter = false`), eliminating indeterminate bytes and uninitialized reads on default construction. | *Reported verification:* 372 assertions passed; `git diff --check` clean; ASan/UBSan clean; H₂ (-1.857275 Ha) and HeH⁺ (-4.218264 Ha) benchmarks identical to baseline. |
+| **Phase 8** | Consecutive RZ Rotation Merging | **Accepted** | Extended `optimizeInstructions()` to merge consecutive finite `RZ` rotations on the same in-range qubit into a single rotation with summed angle; cancels to identity if merged angle is within `1e-12` of zero; preserves measurement boundaries, out-of-range/malformed gates, non-finite angles, and non-zero `2pi` multiples. | *Reported verification:* 387 assertions passed; `git diff --check` clean; ASan/UBSan clean; H₂ (-1.857275 Ha) and HeH⁺ (-4.218264 Ha) benchmarks identical to baseline. |
+| **Phase 9** | CLI Behavior & Input Handling | **Implemented — Pending Review** | Standard `--help` and `-h` command-line flags handled before file read, printing usage instructions to standard output with exit code `0`; verified empty and whitespace-only programs parse cleanly into valid 0-statement programs and exit code `0`. | *Reported verification:* 391 assertions passed; `git diff --check` clean; ASan/UBSan clean; CLI `--help`, `-h`, and empty input verified; chemistry benchmarks identical to baseline. |
+The following items are recorded as non-blocking architectural and technical debt backlog entries, categorized by priority and status:
+
+#### A. Architectural & Code Quality Cleanup
+1. **Dedicated Expression Formatter Architecture**:
+   - `printExpression()` and `formatExpression()` are declared in `include/compiler/ast.h` and implemented in `src/compiler/code_generator.cpp`. A future architectural cleanup may extract them into dedicated translation units (`include/compiler/formatter.h` and `src/compiler/formatter.cpp`).
+2. **Parser Token Lifetime and Reference Safety**:
+   - *(Resolved in Phase 6)*: `Parser` now owns `std::vector<Token> tokens` by value.
+3. **Uninitialized and Default AST Struct Fields**:
+   - *(Resolved in Phase 7)*: `struct Statement` and `struct Expression` in `include/compiler/ast.h` provide explicit in-class member initializers for all primitive members (`type`, `operation`, `line`, `hasParameter`).
+4. **Optimizer Scope Beyond Adjacent Cancellation**:
+   - *(Partial in Phase 8)*: Adjacent `RZ` rotation merging implemented. Commuting gate passes across disjoint qubits and circuit depth metrics remain deferred.
+5. **Circuit Depth Reporting**:
+   - Compute and report critical path circuit depth in the instruction optimizer.
+6. **Test Suite Modularization**:
+   - *(Resolved in test refactor)*: Monolithic `tests/qcompile_tests.cpp` decomposed into modular, subsystem-specific test units (`test_lexer.cpp`, `test_parser.cpp`, `test_semantics.cpp`, `test_optimizer.cpp`, `test_simulator.cpp`, `test_chemistry.cpp`) sharing common assertions in `test_support.h`/`test_support.cpp`. All 391 assertions and test invariants are preserved.
+
+#### B. CLI & Tooling Enhancements
+6. **CLI Flag Parsing & Help Handling**:
+   - *(Resolved in Phase 9)*: `--help` and `-h` flags handled cleanly without attempting to read them as filenames.
+7. **CLI Quiet Mode & Output Verbosity**:
+   - Add standard flags (`-q`, `--quiet`) to suppress debug AST and token stream dumps during regular circuit execution.
+8. **Empty and Whitespace-Only Input Handling**:
+   - *(Verified in Phase 9)*: Empty inputs are valid DSL programs that parse to 0 statements and exit 0. Optional future quiet mode (`-q`) can suppress empty token/AST listings.
+
+#### C. Language & Lexer Features
+9. **Scientific Notation Support in Lexer**:
+   - Support standard scientific floating-point literals (`1e-3`, `1e5`, `2.5e+2`) in `Lexer::tokenize()`.
+10. **General Block Comments**:
+    - Support C-style multi-line comments (`/* ... */`).
+
+#### D. Repository Hygiene & Provenance
+11. **Project License File**:
+    - The repository lacks a root-level `LICENSE` file defining terms for the top-level QCompile codebase (though vendor assets such as Tabler have explicit licenses).
+12. **Absolute File Paths in Offline Psi4 Artifacts**:
+    - *(Resolved in cleanup pass)*: Sanitized environment paths in tracked benchmark logs and documentation (`h2_geometry/README.md`, `psi4_fci_output*.txt`, `psi4_libint290_overlap*.txt`, `psi4_fci_reference*.json`) using neutral `<REPO_ROOT>` and `<SCRATCH_DIR>` placeholders.
+#### E. Consolidated Phase 5 Assignments
+- *Measurement State Collapse* and *Duplicate Measured-Qubit Validation* were previously unassigned baseline audit findings; they are now formally assigned to and scheduled for implementation in **Phase 5** (Section 13.3) rather than tracked as separate backlog work.
+
+### 13.3 Phase 5 Design Gate: Measurement Semantics & Output Correctness
+
+#### Approved Architectural Decisions
+
+1. **Projective Measurement Collapse**:
+   - When `measure` executes, the simulator performs projective measurement collapse.
+   - For a multi-qubit measurement statement (e.g. `measure q0, q1`), the simulator samples the joint outcome distribution of the specified qubits from the state vector.
+   - It projects the state vector onto the sampled outcome subspace and renormalizes the state vector ($\left|\psi'\right\rangle = P_m \left|\psi\right\rangle / \sqrt{\langle\psi|P_m|\psi\rangle}$).
+   - Unmeasured qubits in the register are **not** collapsed; their conditional state, amplitudes, and entanglement correlations with respect to the measured outcome are strictly preserved.
+
+2. **Duplicate Qubit Rejection**:
+   - Semantic analysis (`checkSemantics`) must reject duplicate qubit operands within a single `measure` statement (e.g. `measure q0, q0`).
+   - A clear, line-located diagnostic must be emitted: `Error: duplicate qubit '<name>' in measure statement at line <line>`.
+   - Distinct-qubit measurements (e.g. `measure q0, q1`) must remain valid.
+
+3. **Pre-Measurement Probability Display**:
+   - The displayed probability distribution represents the full-register **pre-measurement** state.
+   - It must be explicitly labeled as pre-measurement probabilities to avoid confusion with the post-collapse state.
+   - The reported measurement result must match the sampled outcome.
+
+4. **Register and Measurement Bit Ordering**:
+   - **Full-register basis-state bitstrings**: Standardized as `q(n-1)...q1 q0`, where `q0` is the rightmost bit and least significant (matching standard computational basis notation $|q_{n-1} \dots q_0\rangle$).
+     - *Example*: In a 2-qubit system where `q0` is $|1\rangle$ and `q1` is $|0\rangle$, the register basis state is represented as `01`.
+   - **Partial-measurement result formatting (Operand-Order Convention)**:
+     - For `measure qA, qB, ...`, the printed measurement result bits follow the exact operand order specified in the statement: the first result character corresponds to `qA`, the second to `qB`, and so on.
+     - *Example distinguishing register order from operand order*:
+       - If a 3-qubit register is in state $|q_2 q_1 q_0\rangle = |011\rangle$:
+         - Full-register display: `011`
+         - Statement `measure q0, q2`: output result is `10` (bit 0 is `q0` = 1, bit 1 is `q2` = 0).
+         - Statement `measure q2, q0`: output result is `01` (bit 0 is `q2` = 0, bit 1 is `q0` = 1).
+   - *Compatibility note*: Standardizing the register bitstring convention to `q(n-1)...q0` alters existing sample outputs (e.g. `samples/bell_state.txt`) where `q0` previously appeared leftmost. Sample documentation, expected strings, and downstream test fixtures must be updated accordingly.
+
+5. **Chemistry Benchmark Isolation**:
+   - Molecular VQE benchmarks (`qcompile_h2`, `qcompile_heh`, `qcompile_benchmarks`) calculate expectation values directly from the state vector using `pauliExpectation()` without calling `measure()`. Chemistry ground-state energy outputs and variational optimizations remain strictly unaffected by DSL measurement collapse.
+
+#### Phase 5 Objective Acceptance Criteria
+
+- **C1 (Duplicate Rejection)**: `measure q0, q0` is rejected during semantic checking with `Error: duplicate qubit 'q0' in measure statement at line <line>`; `measure q0, q1` is accepted.
+- **C2 (Repeat Measurement Invariant)**: Repeated measurement of an already-measured qubit returns the same outcome with probability 1.0, absent intervening gates.
+- **C3 (Intervening Gate on Collapsed State)**: Measurement followed by a gate and another measurement demonstrates that the intervening gate acts on the collapsed state vector.
+- **C4 (Partial Measurement & Correlation Preservation)**: In an entangled state (e.g. Bell state $(|00\rangle + |11\rangle)/\sqrt{2}$), measuring only `q0` projects `q1` into the corresponding correlated state without unmeasured-qubit destruction.
+- **C5 (Joint Multi-Qubit Collapse)**: Multi-qubit measurement statements collapse the register onto the jointly sampled outcome subspace.
+- **C6 (Full-Register Bit-Ordering Mapping)**: Explicit tests verify state-index-to-bitstring mapping for `q0` and `q1` with `q0` as the rightmost/least-significant bit (`q(n-1)...q0`).
+- **C7 (Operand-Order Measurement Result Mapping)**: Explicit tests verify that `measure qA, qB` outputs result bits in the exact operand sequence `qA, qB`.
+- **C8 (Pre-Measurement Labeling)**: Output cleanly identifies pre-measurement probabilities.
+- **C9 (Chemistry Unchanged)**: H₂ and HeH⁺ benchmark energies remain identical to established baselines.
+- **C10 (Full Suite & Sanitizers)**: All unit tests and ASan/UBSan checks pass cleanly.

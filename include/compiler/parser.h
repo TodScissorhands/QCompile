@@ -8,17 +8,20 @@
 
 class Parser {
 public:
-  Parser(const std::vector<Token> &tokenList);
+  explicit Parser(std::vector<Token> tokenList);
 
   Program parse();
 
 private:
-  const std::vector<Token> &tokens;
+  std::vector<Token> tokens;
+  Token eofToken;
 
   int current;
+  int recursionDepth;
+
+  static constexpr int kMaxNestingDepth = 256;
 
   const Token &peek() const;
-
   const Token &advance();
 
   bool check(TokenType type) const;

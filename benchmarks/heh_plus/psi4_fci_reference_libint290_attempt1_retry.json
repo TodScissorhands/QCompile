@@ -43,6 +43,6 @@
     "threads": 1,
     "memory": "1 GB",
     "energy_convention": "Psi4 FCI total energy includes nuclear repulsion; electronic energy is total minus nuclear repulsion",
-    "scratch_directory": "/home/tod/QCompile/benchmarks/heh_plus/.psi4-scratch-libint290-attempt1-retry"
+    "scratch_directory": "<SCRATCH_DIR>"
   }
 }

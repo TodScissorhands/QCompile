@@ -1,7 +1,7 @@
 #include "compiler/semantic_checker.h"
 
+#include <cmath>
 #include <stdexcept>
-
 namespace {
 
 int findNameIndex(
@@ -23,10 +23,32 @@ bool evaluateExpression(
     double &value,
     const std::vector<std::string> &variableNames,
     const std::vector<double> &variableValues,
-    std::vector<std::string> &errors
+    std::vector<std::string> &errors,
+    const std::string &context
 ) {
   if (expression.type == ExpressionType::NumberLiteral) {
-    value = std::stod(expression.text);
+    try {
+      std::size_t processed = 0;
+      value = std::stod(expression.text, &processed);
+      if (processed != expression.text.size()) {
+        errors.push_back("Error: invalid number literal '" + expression.text +
+                         "' at line " + std::to_string(line));
+        return false;
+      }
+    } catch (const std::out_of_range &) {
+      errors.push_back("Error: number literal '" + expression.text +
+                       "' out of range at line " + std::to_string(line));
+      return false;
+    } catch (const std::invalid_argument &) {
+      errors.push_back("Error: invalid number literal '" + expression.text +
+                       "' at line " + std::to_string(line));
+      return false;
+    }
+    if (!std::isfinite(value)) {
+      errors.push_back("Error: non-finite number literal '" + expression.text +
+                       "' at line " + std::to_string(line));
+      return false;
+    }
     return true;
   }
 
@@ -50,50 +72,89 @@ bool evaluateExpression(
         childValue,
         variableNames,
         variableValues,
-        errors
+        errors,
+        context
     );
+    if (!isValid) {
+      return false;
+    }
     value = -childValue;
-    return isValid;
-  }
-
-  double leftValue = 0.0;
-  double rightValue = 0.0;
-  bool leftIsValid = evaluateExpression(
-      expression.children[0],
-      line,
-      leftValue,
-      variableNames,
-      variableValues,
-      errors
-  );
-  bool rightIsValid = evaluateExpression(
-      expression.children[1],
-      line,
-      rightValue,
-      variableNames,
-      variableValues,
-      errors
-  );
-
-  if (!leftIsValid || !rightIsValid) {
-    return false;
-  }
-
-  if (expression.operation == '+') {
-    value = leftValue + rightValue;
-  } else if (expression.operation == '-') {
-    value = leftValue - rightValue;
-  } else if (expression.operation == '*') {
-    value = leftValue * rightValue;
-  } else if (expression.operation == '/') {
-    if (rightValue == 0.0) {
-      errors.push_back("Error: division by zero in gate parameter at line " +
+    if (!std::isfinite(value)) {
+      errors.push_back("Error: non-finite arithmetic result at line " +
                        std::to_string(line));
       return false;
     }
-    value = leftValue / rightValue;
+    return true;
   }
 
+  // Binary expression: unroll left-associative spines iteratively to prevent stack overflow.
+  std::vector<const Expression *> operations;
+  const Expression *curr = &expression;
+  while (curr->type == ExpressionType::BinaryOperation) {
+    operations.push_back(curr);
+    curr = &curr->children[0];
+  }
+
+  double accumulator = 0.0;
+  bool accumValid = evaluateExpression(
+      *curr,
+      line,
+      accumulator,
+      variableNames,
+      variableValues,
+      errors,
+      context
+  );
+
+  bool allValid = accumValid;
+
+  for (auto it = operations.rbegin(); it != operations.rend(); ++it) {
+    const Expression *opNode = *it;
+    double rightValue = 0.0;
+    bool rightValid = evaluateExpression(
+        opNode->children[1],
+        line,
+        rightValue,
+        variableNames,
+        variableValues,
+        errors,
+        context
+    );
+
+    if (!rightValid) {
+      allValid = false;
+    }
+
+    if (allValid) {
+      if (opNode->operation == '+') {
+        accumulator = accumulator + rightValue;
+      } else if (opNode->operation == '-') {
+        accumulator = accumulator - rightValue;
+      } else if (opNode->operation == '*') {
+        accumulator = accumulator * rightValue;
+      } else if (opNode->operation == '/') {
+        if (rightValue == 0.0) {
+          errors.push_back("Error: division by zero in " + context + " at line " +
+                           std::to_string(line));
+          allValid = false;
+        } else {
+          accumulator = accumulator / rightValue;
+        }
+      }
+
+      if (allValid && !std::isfinite(accumulator)) {
+        errors.push_back("Error: non-finite arithmetic result at line " +
+                         std::to_string(line));
+        allValid = false;
+      }
+    }
+  }
+
+  if (!allValid) {
+    return false;
+  }
+
+  value = accumulator;
   return true;
 }
 
@@ -135,7 +196,8 @@ SemanticResult checkSemantics(const Program &program) {
           variableValue,
           result.variableNames,
           result.variableValues,
-          result.errors
+          result.errors,
+          "declaration"
       );
 
       if (isValid && !alreadyDefined) {
@@ -143,6 +205,19 @@ SemanticResult checkSemantics(const Program &program) {
         result.variableValues.push_back(variableValue);
       }
       continue;
+    }
+    if (statement.gate == "measure") {
+      std::vector<std::string> seenQubits;
+      for (int j = 0; j < static_cast<int>(statement.qubits.size()); j = j + 1) {
+        if (findNameIndex(seenQubits, statement.qubits[j]) != -1) {
+          result.errors.push_back("Error: duplicate qubit '" +
+                                  statement.qubits[j] +
+                                  "' in measure statement at line " +
+                                  std::to_string(statement.line));
+        } else {
+          seenQubits.push_back(statement.qubits[j]);
+        }
+      }
     }
 
     for (int j = 0; j < static_cast<int>(statement.qubits.size()); j = j + 1) {
@@ -195,7 +270,8 @@ SemanticResult checkSemantics(const Program &program) {
           parameterValue,
           result.variableNames,
           result.variableValues,
-          result.errors
+          result.errors,
+          "gate parameter"
       )) {
         result.parameterValues[i] = parameterValue;
       }

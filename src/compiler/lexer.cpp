@@ -32,6 +32,13 @@ std::vector<Token> Lexer::tokenize() const {
     if (current == ' ' || current == '\t' || current == '\r') {
       position = position + 1;
       column = column + 1;
+    } else if (current == '#') {
+      while (position < static_cast<int>(source.size()) && source[position] != '\n') {
+        position = position + 1;
+        column = column + 1;
+      }
+      // Line remains unchanged; column is reset on '\n' or retained at EOF.
+      // Do not consume '\n' here so that statement-terminating newline tokens are preserved.
       // Newlines are tokens because they end statements in this DSL.
     } else if (current == '\n') {
       tokens.push_back({TokenType::Newline, "\\n", line, column});

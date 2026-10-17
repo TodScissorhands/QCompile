@@ -62,7 +62,7 @@ void Simulator::applyCNOT(int control, int target) {
 std::string Simulator::bitString(std::size_t stateIndex) const {
   std::string result;
 
-  for (int i = 0; i < qubitCount; i = i + 1) {
+  for (int i = qubitCount - 1; i >= 0; i = i - 1) {
     const std::size_t mask = std::size_t{1} << static_cast<unsigned int>(i);
     if ((stateIndex & mask) == 0) {
       result = result + "0";
@@ -75,29 +75,75 @@ std::string Simulator::bitString(std::size_t stateIndex) const {
 }
 
 void Simulator::measure(const std::vector<int> &measuredQubits) {
-  std::vector<double> probabilities;
-
-  std::cout << "\nProbabilities:\n";
+  // 1. Calculate and display pre-measurement probability distribution of the full register
+  std::cout << "\nPre-measurement probabilities:\n";
   for (std::size_t i = 0; i < state.size(); i = i + 1) {
     double probability = std::norm(state[i]);
-    probabilities.push_back(probability);
-
     if (probability > 0.000001) {
       std::cout << "  " << bitString(i) << ": " << std::fixed
                 << std::setprecision(6) << probability << "\n";
     }
   }
 
-  std::discrete_distribution<int> distribution(
-      probabilities.begin(),
-      probabilities.end()
-  );
-  const int outcome = distribution(randomGenerator);
-  std::string fullResult = bitString(static_cast<std::size_t>(outcome));
-  std::string measuredResult;
+  // If no qubits are specified, measurement is a no-op
+  if (measuredQubits.empty()) {
+    return;
+  }
 
-  for (int i = 0; i < static_cast<int>(measuredQubits.size()); i = i + 1) {
-    measuredResult = measuredResult + fullResult[measuredQubits[i]];
+  // 2. Compute joint outcome distribution over the 2^k subspace of the measured qubits
+  const std::size_t k = measuredQubits.size();
+  const std::size_t numOutcomes = std::size_t{1} << k;
+  std::vector<double> jointProbabilities(numOutcomes, 0.0);
+
+  for (std::size_t i = 0; i < state.size(); i = i + 1) {
+    std::size_t outcomeIndex = 0;
+    for (std::size_t j = 0; j < k; ++j) {
+      const int qubit = measuredQubits[j];
+      const std::size_t mask = std::size_t{1} << static_cast<unsigned int>(qubit);
+      if ((i & mask) != 0) {
+        outcomeIndex |= (std::size_t{1} << j);
+      }
+    }
+    jointProbabilities[outcomeIndex] += std::norm(state[i]);
+  }
+
+  // 3. Sample the joint outcome
+  std::discrete_distribution<int> distribution(
+      jointProbabilities.begin(),
+      jointProbabilities.end()
+  );
+  const int sampled = distribution(randomGenerator);
+  const std::size_t sampledOutcome = static_cast<std::size_t>(sampled);
+  const double outcomeProb = jointProbabilities[sampledOutcome];
+
+  // 4. Construct measured result string in operand order
+  std::string measuredResult;
+  for (std::size_t j = 0; j < k; ++j) {
+    if ((sampledOutcome & (std::size_t{1} << j)) != 0) {
+      measuredResult += "1";
+    } else {
+      measuredResult += "0";
+    }
+  }
+
+  // 5. Project the state vector onto the sampled outcome subspace and renormalize
+  if (outcomeProb > 0.0) {
+    const double normFactor = 1.0 / std::sqrt(outcomeProb);
+    for (std::size_t i = 0; i < state.size(); i = i + 1) {
+      std::size_t outcomeIndex = 0;
+      for (std::size_t j = 0; j < k; ++j) {
+        const int qubit = measuredQubits[j];
+        const std::size_t mask = std::size_t{1} << static_cast<unsigned int>(qubit);
+        if ((i & mask) != 0) {
+          outcomeIndex |= (std::size_t{1} << j);
+        }
+      }
+      if (outcomeIndex == sampledOutcome) {
+        state[i] = state[i] * normFactor;
+      } else {
+        state[i] = 0.0;
+      }
+    }
   }
 
   std::cout << "Result: " << measuredResult << "\n";

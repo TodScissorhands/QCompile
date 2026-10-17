@@ -2,7 +2,7 @@
 
   Memory set to 953.674 MiB by Python driver.
 
-Scratch directory: /home/tod/QCompile/benchmarks/heh_plus/.psi4-scratch-libint290-attempt1-retry/
+Scratch directory: <REPO_ROOT>/benchmarks/heh_plus/.psi4-scratch-libint290-attempt1-retry/
    => Libint2 <=
 
     Primary   basis highest AM E, G, H:  6, 6, 3
@@ -18,8 +18,8 @@ Scratch directory: /home/tod/QCompile/benchmarks/heh_plus/.psi4-scratch-libint29
     Name: STO-3G
     Role: ORBITAL
     Keyword: BASIS
-    atoms 1 entry HE         line    25 file /home/tod/QCompile/benchmarks/heh_plus/.conda-psi4-libint290-attempt1/share/psi4/basis/sto-3g.gbs 
-    atoms 2 entry H          line    19 file /home/tod/QCompile/benchmarks/heh_plus/.conda-psi4-libint290-attempt1/share/psi4/basis/sto-3g.gbs 
+    atoms 1 entry HE         line    25 file <REPO_ROOT>/benchmarks/heh_plus/.conda-psi4-libint290-attempt1/share/psi4/basis/sto-3g.gbs
+    atoms 2 entry H          line    19 file <REPO_ROOT>/benchmarks/heh_plus/.conda-psi4-libint290-attempt1/share/psi4/basis/sto-3g.gbs
 
 
          ---------------------------------------------------------

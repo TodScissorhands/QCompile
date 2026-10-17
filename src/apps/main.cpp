@@ -9,39 +9,8 @@
 #include <iostream>
 #include <stdexcept>
 
-void printExpression(const Expression &expression, int parentPrecedence) {
-  int precedence = 4;
-
-  if (expression.type == ExpressionType::BinaryOperation) {
-    if (expression.operation == '+' || expression.operation == '-') {
-      precedence = 1;
-    } else {
-      precedence = 2;
-    }
-  } else if (expression.type == ExpressionType::UnaryOperation) {
-    precedence = 3;
-  }
-
-  bool needsParentheses = precedence < parentPrecedence;
-  if (needsParentheses) {
-    std::cout << "(";
-  }
-
-  if (expression.type == ExpressionType::NumberLiteral ||
-      expression.type == ExpressionType::Identifier) {
-    std::cout << expression.text;
-  } else if (expression.type == ExpressionType::UnaryOperation) {
-    std::cout << expression.operation;
-    printExpression(expression.children[0], precedence);
-  } else {
-    printExpression(expression.children[0], precedence);
-    std::cout << " " << expression.operation << " ";
-    printExpression(expression.children[1], precedence);
-  }
-
-  if (needsParentheses) {
-    std::cout << ")";
-  }
+void printExpression(const Expression &expression, int parentPrecedence, bool isRightChild = false) {
+  printExpression(std::cout, expression, parentPrecedence, isRightChild);
 }
 
 void printProgram(const Program &program) {
@@ -124,8 +93,13 @@ int main(int argc, char *argv[]) {
     return 1;
   }
 
-  std::string filename = argv[1];
+  std::string arg = argv[1];
+  if (arg == "--help" || arg == "-h") {
+    std::cout << "Usage: ./qcompile <path-to-program.txt>\n";
+    return 0;
+  }
 
+  std::string filename = arg;
   try {
     std::string source = readSourceFile(filename);
 

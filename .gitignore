@@ -1,6 +1,6 @@
 qcompile
 *.o
-
+build/
 # Local build outputs
 /qcompile_h2
 /qcompile_heh

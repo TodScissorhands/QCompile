@@ -19,7 +19,7 @@ public:
   void run(const std::vector<Instruction> &instructions);
   double expectation(const std::vector<Pauli> &operators) const;
   const std::vector<std::complex<double>> &stateVector() const;
-
+  std::string bitString(std::size_t stateIndex) const;
 private:
   int qubitCount;
   std::vector<std::complex<double>> state;
@@ -34,5 +34,4 @@ private:
   );
   void applyCNOT(int control, int target);
   void measure(const std::vector<int> &measuredQubits);
-  std::string bitString(std::size_t stateIndex) const;
 };

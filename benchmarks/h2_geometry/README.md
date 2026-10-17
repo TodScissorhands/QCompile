@@ -70,8 +70,8 @@ Use the compatible, isolated Psi4 environment. The output JSON, log, and scratch
 ```bash
 mkdir /tmp/qcompile-h2-psi4-run
 cd /tmp/qcompile-h2-psi4-run
-/home/tod/QCompile/benchmarks/heh_plus/.conda-psi4-libint290-attempt1/bin/python -B \
-  /home/tod/QCompile/benchmarks/h2_geometry/validate_psi4_h2.py \
+<REPO_ROOT>/benchmarks/heh_plus/.conda-psi4-libint290-attempt1/bin/python -B \
+  <REPO_ROOT>/benchmarks/h2_geometry/validate_psi4_h2.py \
   --distance-angstrom 0.735 \
   --generator-provenance /tmp/h2-0735-final.qham.provenance.json \
   --output-json /tmp/h2-psi4-0735.json \

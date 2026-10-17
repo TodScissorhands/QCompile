@@ -1,6 +1,9 @@
 #include "compiler/code_generator.h"
 
+#include <cmath>
 #include <iostream>
+#include <sstream>
+#include <vector>
 
 namespace {
 
@@ -51,6 +54,32 @@ bool canCancel(const Instruction &left, const Instruction &right,
   return false;
 }
 
+bool canMergeRz(const Instruction &left, const Instruction &right,
+                std::size_t qubitCount, double &mergedAngle) {
+  if (left.type != InstructionType::ApplyGate ||
+      right.type != InstructionType::ApplyGate ||
+      left.gateName != "RZ" ||
+      right.gateName != "RZ" ||
+      left.qubitIndices != right.qubitIndices ||
+      left.qubitIndices.size() != 1 ||
+      left.qubitIndices[0] < 0 ||
+      static_cast<std::size_t>(left.qubitIndices[0]) >= qubitCount) {
+    return false;
+  }
+
+  if (!std::isfinite(left.parameterValue) || !std::isfinite(right.parameterValue)) {
+    return false;
+  }
+
+  double sum = left.parameterValue + right.parameterValue;
+  if (!std::isfinite(sum)) {
+    return false;
+  }
+
+  mergedAngle = sum;
+  return true;
+}
+
 } // namespace
 
 std::vector<Instruction> optimizeInstructions(
@@ -64,6 +93,17 @@ std::vector<Instruction> optimizeInstructions(
     if (!optimized.empty() &&
         canCancel(optimized.back(), instruction, qubitCount)) {
       optimized.pop_back();
+    } else if (!optimized.empty()) {
+      double mergedAngle = 0.0;
+      if (canMergeRz(optimized.back(), instruction, qubitCount, mergedAngle)) {
+        if (std::abs(mergedAngle) < 1e-12) {
+          optimized.pop_back();
+        } else {
+          optimized.back().parameterValue = mergedAngle;
+        }
+      } else {
+        optimized.push_back(instruction);
+      }
     } else {
       optimized.push_back(instruction);
     }
@@ -133,4 +173,71 @@ void printInstructions(const std::vector<Instruction> &instructions) {
     }
     std::cout << "]\n";
   }
+}
+
+void printExpression(
+    std::ostream &out,
+    const Expression &expression,
+    int parentPrecedence,
+    bool isRightChild
+) {
+  // If this is a binary expression, unroll left spine iteratively
+  if (expression.type == ExpressionType::BinaryOperation) {
+    int precedence = (expression.operation == '+' || expression.operation == '-') ? 1 : 2;
+    // Parenthesize if lower precedence than parent, OR if equal precedence as the right operand
+    // in left-associative syntax (e.g. 10 - (3 - 2), 24 / (4 / 2), 2 + (3 - 1)).
+    bool needsParentheses = (precedence < parentPrecedence) || (isRightChild && precedence == parentPrecedence);
+    if (needsParentheses) {
+      out << "(";
+    }
+
+    std::vector<const Expression *> spine;
+    const Expression *curr = &expression;
+    while (curr->type == ExpressionType::BinaryOperation &&
+           ((curr->operation == '+' || curr->operation == '-') ? 1 : 2) == precedence) {
+      spine.push_back(curr);
+      curr = &curr->children[0];
+    }
+
+    printExpression(out, *curr, precedence, false);
+
+    for (auto it = spine.rbegin(); it != spine.rend(); ++it) {
+      const Expression *node = *it;
+      out << " " << node->operation << " ";
+      printExpression(out, node->children[1], precedence, true);
+    }
+
+    if (needsParentheses) {
+      out << ")";
+    }
+    return;
+  }
+
+  int precedence = (expression.type == ExpressionType::UnaryOperation) ? 3 : 4;
+  bool needsParentheses = precedence < parentPrecedence;
+  if (needsParentheses) {
+    out << "(";
+  }
+
+  if (expression.type == ExpressionType::NumberLiteral ||
+      expression.type == ExpressionType::Identifier) {
+    out << expression.text;
+  } else if (expression.type == ExpressionType::UnaryOperation) {
+    out << expression.operation;
+    printExpression(out, expression.children[0], precedence, false);
+  }
+
+  if (needsParentheses) {
+    out << ")";
+  }
+}
+
+std::string formatExpression(
+    const Expression &expression,
+    int parentPrecedence,
+    bool isRightChild
+) {
+  std::ostringstream out;
+  printExpression(out, expression, parentPrecedence, isRightChild);
+  return out.str();
 }
