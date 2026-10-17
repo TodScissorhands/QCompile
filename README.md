@@ -186,7 +186,7 @@ Open `http://127.0.0.1:4173` in a web browser. The server executes allowlisted b
 ## Technical Limitations
 
 - **Statevector Scaling**: The statevector simulator allocates $2^n$ complex amplitudes (`std::complex<double>`). Qubit counts are capped at 24 qubits (~256 MiB amplitude buffer) to prevent memory exhaustion.
-- **Measurement Model**: Measurements calculate probabilities and sample basis outcomes using a seeded PRNG (`std::mt19937`); they display outcomes without collapsing the statevector for mid-circuit conditional logic.
+- **Measurement Model**: Measurements calculate probabilities, sample basis outcomes using a seeded PRNG (`std::mt19937`), project the statevector onto the observed subspace, and renormalize, preserving conditional states and entanglement on unmeasured qubits.
 - **Gate Set**: Supported unitary operations are restricted to `H`, `X`, `Z`, `CNOT`, and `RZ`. General arbitrary single-qubit rotations or multi-qubit controlled gates require decomposition before input.
 - **Optimizer Scope**: The adjacent-gate optimizer performs local pairwise self-inverse cancellations ($H^2=I$, $X^2=I$, $Z^2=I$, $\text{CNOT}^2=I$) on identical adjacent operations. It does not reorder non-commuting gates or synthesize multi-qubit topologies.
 - **Chemistry Benchmarks**: Molecular benchmarks evaluate specific frozen models (H₂ in STO-3G with parity reduction; HeH⁺ in STO-3G with Jordan–Wigner) within designated symmetry sectors. They do not constitute an arbitrary quantum chemistry platform.

@@ -340,7 +340,7 @@ The command-line driver runs this pass after generation and before simulation. I
 
 `bitString` examines each qubit bit from index `0` through `qubitCount - 1` and appends `0` or `1` to a string. The displayed character order therefore follows QCompile's zero-based qubit-index order.
 
-`measure` calculates `std::norm` for every amplitude and uses those values as a probability vector. It prints each non-negligible basis-state probability, constructs `std::discrete_distribution<int>`, samples a full-state outcome with the seeded generator, then prints only the bits named by the measurement instruction. The current implementation samples and displays a result; it does not modify the state vector after measurement.
+`measure` calculates `std::norm` for every amplitude and uses those values as a probability vector. It prints each non-negligible basis-state probability, constructs `std::discrete_distribution<int>`, samples a full-state outcome with the seeded generator, then prints only the bits named by the measurement instruction. When a measurement executes, the simulator calculates pre-measurement probabilities, samples a joint outcome, projects the state vector onto the measured subspace, and renormalizes.
 
 `run` loops through generated instructions. Measurement instructions call `measure`. `H`, `X`, and `Z` provide their fixed 2x2 matrix entries to `applySingleQubitGate`. `RZ` computes phases `exp(-i theta/2)` and `exp(i theta/2)` from the evaluated parameter and applies the diagonal matrix. `CNOT` calls `applyCNOT` with its two indices.
 
@@ -382,7 +382,7 @@ QCompile deliberately keeps the DSL small so every implemented rule can be demon
 - **Limited circuit optimization:** The pass cancels only adjacent identical H, X, Z, or same-ordered CNOT pairs. It does not reorder instructions, optimize RZ, cross measurements, or compute circuit depth.
 - **Small state-vector simulation:** The simulator stores every basis-state amplitude, so its memory requirement grows as `2^n`. This is a textbook-correct and transparent approach for the small examples in this project, not a large-scale simulation strategy.
 - **Numeric parameter evaluation only:** Variables and arithmetic expressions are evaluated to `double` values during semantic checking. Symbolic algebra is intentionally not implemented because the current simulator requires concrete values for `RZ` angles.
-- **Measurement sampling without collapse:** Measurement calculates and samples probabilities but does not update the state vector after sampling. The provided sample programs measure at the end, which fits the current scope.
+- **Projective measurement collapse:** When a measurement executes, the simulator calculates pre-measurement probabilities, samples a joint outcome, projects the state vector onto the measured subspace, and renormalizes, preserving conditional states and entanglement on unmeasured qubits.
 
 These are engineering choices, not incomplete parser cases: the implemented language is intentionally a compact circuit description language with a complete lexer-to-simulator path.
 

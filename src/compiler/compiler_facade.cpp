@@ -1,4 +1,5 @@
 #include "compiler/compiler_facade.h"
+#include "compiler/circuit_dag.h"
 
 #include "compiler/lexer.h"
 #include "compiler/parser.h"
@@ -95,10 +96,22 @@ CompilationResult compileProgram(
   result.qubitNames = semanticResult.qubitNames;
   result.rawInstructions = generateInstructions(result.program, semanticResult);
 
+  CircuitDag rawDag = CircuitDag::fromInstructions(result.rawInstructions, result.qubitCount);
+  result.rawGateCount = rawDag.gateCount(InstructionType::ApplyGate);
+  result.rawTwoQubitCount = rawDag.twoQubitGateCount();
+  result.rawDepth = rawDag.criticalPathDepth();
+
   if (options.optimize) {
-    result.instructions = optimizeInstructions(result.rawInstructions, result.qubitCount);
+    CircuitDag optDag = rawDag.optimize();
+    result.instructions = optDag.toInstructions();
+    result.optimizedGateCount = optDag.gateCount(InstructionType::ApplyGate);
+    result.optimizedTwoQubitCount = optDag.twoQubitGateCount();
+    result.optimizedDepth = optDag.criticalPathDepth();
   } else {
     result.instructions = result.rawInstructions;
+    result.optimizedGateCount = result.rawGateCount;
+    result.optimizedTwoQubitCount = result.rawTwoQubitCount;
+    result.optimizedDepth = result.rawDepth;
   }
 
   result.success = true;

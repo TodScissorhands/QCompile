@@ -1,3 +1,4 @@
+#include "compiler/circuit_dag.h"
 #include "compiler/code_generator.h"
 #include "compiler/lexer.h"
 #include "compiler/parser.h"
@@ -136,26 +137,26 @@ int main(int argc, char *argv[]) {
     const std::vector<Instruction> instructions =
         optimizeInstructions(originalInstructions, qubitCount);
 
-    const auto countInstructions = [](const std::vector<Instruction> &items,
-                                      InstructionType type) {
-      std::size_t count = 0;
-      for (const Instruction &instruction : items) {
-        if (instruction.type == type) {
-          ++count;
-        }
-      }
-      return count;
-    };
+    compiler::CircuitDag rawDag = compiler::CircuitDag::fromInstructions(originalInstructions, qubitCount);
+    compiler::CircuitDag optDag = compiler::CircuitDag::fromInstructions(instructions, qubitCount);
+
     std::cout << "\nInstruction counts:\n"
               << "  Original unitary gates: "
-              << countInstructions(originalInstructions,
-                                   InstructionType::ApplyGate)
+              << rawDag.gateCount(InstructionType::ApplyGate)
               << "\n  Optimized unitary gates: "
-              << countInstructions(instructions, InstructionType::ApplyGate)
+              << optDag.gateCount(InstructionType::ApplyGate)
+              << "\n  Original two-qubit gates (CNOT): "
+              << rawDag.twoQubitGateCount()
+              << "\n  Optimized two-qubit gates (CNOT): "
+              << optDag.twoQubitGateCount()
+              << "\n  Original circuit depth: "
+              << rawDag.criticalPathDepth() << " layers"
+              << "\n  Optimized circuit depth: "
+              << optDag.criticalPathDepth() << " layers"
               << "\n  Original measurements: "
-              << countInstructions(originalInstructions, InstructionType::Measure)
+              << rawDag.gateCount(InstructionType::Measure)
               << "\n  Optimized measurements: "
-              << countInstructions(instructions, InstructionType::Measure)
+              << optDag.gateCount(InstructionType::Measure)
               << '\n';
     printInstructions(instructions);
 

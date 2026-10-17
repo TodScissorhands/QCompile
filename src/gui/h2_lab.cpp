@@ -2317,8 +2317,9 @@ private:
 
     if (lastCompilation_.success) {
       compileStatusLabel_->setText(
-          QStringLiteral("COMPILED · %1 instruction(s) · %2 qubit(s)")
+          QStringLiteral("COMPILED · %1 gate(s) · Depth %2 · %3 qubit(s)")
               .arg(lastCompilation_.instructions.size())
+              .arg(lastCompilation_.optimizedDepth)
               .arg(lastCompilation_.qubitCount));
       compileStatusLabel_->setStyleSheet(QStringLiteral(
           "font-family:monospace;font-size:11px;font-weight:700;color:#38bdf8;padding:4px 8px;background:#0f172a;border:1px solid #1e293b;border-radius:2px"));
@@ -2867,6 +2868,7 @@ private:
     QFile::remove(smokeCsv);
 
     // 1b. Test HeH+ 4-qubit circuit preset in Circuit Workbench
+    optimizeCheck_->setChecked(false);
     exampleCombo_->setCurrentIndex(4);
     if (!dslEditor_->toPlainText().contains(QStringLiteral("qubit q0, q1, q2, q3"))) {
       finishSmokeTest(false, QStringLiteral("HeH+ preset did not load 4-qubit declaration"));
@@ -2891,6 +2893,13 @@ private:
     // Index 5 is |0101> in bit order (q0=1, q1=0, q2=1, q3=0)
     if (std::abs(circuitSession_->currentState()[5] - std::complex<double>(1.0, 0.0)) > 1e-12) {
       finishSmokeTest(false, QStringLiteral("HeH+ state after X0, X2 is not determinant |0101>"));
+      return;
+    }
+    // Verify optimization pass reduces gate count on HeH+
+    optimizeCheck_->setChecked(true);
+    compileDsl();
+    if (lastCompilation_.instructions.size() >= lastCompilation_.rawInstructions.size()) {
+      finishSmokeTest(false, QStringLiteral("optimization pass did not reduce HeH+ gate count"));
       return;
     }
     circuitResetBtn_->click();

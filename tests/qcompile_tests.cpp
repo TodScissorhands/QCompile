@@ -22,6 +22,7 @@ void testSimulationSession();
 void testWorkbenchIntegration();
 void testExperimentBundle();
 void testMolecularIntegralEngine();
+void testCircuitDag();
 } // namespace test
 int main() {
   try {
@@ -44,6 +45,7 @@ int main() {
     test::testWorkbenchIntegration();
     test::testExperimentBundle();
     test::testMolecularIntegralEngine();
+    test::testCircuitDag();
   } catch (const std::exception &error) {
     std::cerr << "FAIL after " << test::assertions << " assertions: " << error.what() << '\n';
     return 1;

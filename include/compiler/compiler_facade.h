@@ -35,6 +35,14 @@ struct CompilationResult {
   Program program;
   std::vector<std::string> qubitNames;
 
+  // Milestone 6 Circuit DAG & scheduling metrics
+  std::size_t rawGateCount = 0;
+  std::size_t optimizedGateCount = 0;
+  std::size_t rawTwoQubitCount = 0;
+  std::size_t optimizedTwoQubitCount = 0;
+  std::size_t rawDepth = 0;
+  std::size_t optimizedDepth = 0;
+
   bool hasErrors() const { return !success; }
   std::vector<std::string> errorMessages() const {
     std::vector<std::string> result;

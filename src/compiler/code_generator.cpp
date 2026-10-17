@@ -1,4 +1,5 @@
 #include "compiler/code_generator.h"
+#include "compiler/circuit_dag.h"
 
 #include <cmath>
 #include <iostream>
@@ -22,94 +23,11 @@ int findQubitIndex(
 
 } // namespace
 
-namespace {
-
-bool canCancel(const Instruction &left, const Instruction &right,
-               std::size_t qubitCount) {
-  if (left.type != InstructionType::ApplyGate ||
-      right.type != InstructionType::ApplyGate ||
-      left.gateName != right.gateName ||
-      left.qubitIndices != right.qubitIndices ||
-      left.parameterValue != 0.0 ||
-      right.parameterValue != 0.0) {
-    return false;
-  }
-
-  if (left.gateName == "H" || left.gateName == "X" ||
-      left.gateName == "Z") {
-    return left.qubitIndices.size() == 1 &&
-           left.qubitIndices[0] >= 0 &&
-           static_cast<std::size_t>(left.qubitIndices[0]) < qubitCount;
-  }
-
-  if (left.gateName == "CNOT") {
-    return left.qubitIndices.size() == 2 &&
-           left.qubitIndices[0] >= 0 &&
-           left.qubitIndices[1] >= 0 &&
-           static_cast<std::size_t>(left.qubitIndices[0]) < qubitCount &&
-           static_cast<std::size_t>(left.qubitIndices[1]) < qubitCount &&
-           left.qubitIndices[0] != left.qubitIndices[1];
-  }
-
-  return false;
-}
-
-bool canMergeRz(const Instruction &left, const Instruction &right,
-                std::size_t qubitCount, double &mergedAngle) {
-  if (left.type != InstructionType::ApplyGate ||
-      right.type != InstructionType::ApplyGate ||
-      left.gateName != "RZ" ||
-      right.gateName != "RZ" ||
-      left.qubitIndices != right.qubitIndices ||
-      left.qubitIndices.size() != 1 ||
-      left.qubitIndices[0] < 0 ||
-      static_cast<std::size_t>(left.qubitIndices[0]) >= qubitCount) {
-    return false;
-  }
-
-  if (!std::isfinite(left.parameterValue) || !std::isfinite(right.parameterValue)) {
-    return false;
-  }
-
-  double sum = left.parameterValue + right.parameterValue;
-  if (!std::isfinite(sum)) {
-    return false;
-  }
-
-  mergedAngle = sum;
-  return true;
-}
-
-} // namespace
-
 std::vector<Instruction> optimizeInstructions(
     const std::vector<Instruction> &instructions,
     std::size_t qubitCount
 ) {
-  std::vector<Instruction> optimized;
-  optimized.reserve(instructions.size());
-
-  for (const Instruction &instruction : instructions) {
-    if (!optimized.empty() &&
-        canCancel(optimized.back(), instruction, qubitCount)) {
-      optimized.pop_back();
-    } else if (!optimized.empty()) {
-      double mergedAngle = 0.0;
-      if (canMergeRz(optimized.back(), instruction, qubitCount, mergedAngle)) {
-        if (std::abs(mergedAngle) < 1e-12) {
-          optimized.pop_back();
-        } else {
-          optimized.back().parameterValue = mergedAngle;
-        }
-      } else {
-        optimized.push_back(instruction);
-      }
-    } else {
-      optimized.push_back(instruction);
-    }
-  }
-
-  return optimized;
+  return compiler::optimizeWithDag(instructions, qubitCount);
 }
 
 std::vector<Instruction> generateInstructions(
