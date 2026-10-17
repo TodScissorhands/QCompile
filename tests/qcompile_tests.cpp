@@ -23,6 +23,7 @@ void testWorkbenchIntegration();
 void testExperimentBundle();
 void testMolecularIntegralEngine();
 void testCircuitDag();
+void testCouplingMapAndRouting();
 } // namespace test
 int main() {
   try {
@@ -46,6 +47,7 @@ int main() {
     test::testExperimentBundle();
     test::testMolecularIntegralEngine();
     test::testCircuitDag();
+    test::testCouplingMapAndRouting();
   } catch (const std::exception &error) {
     std::cerr << "FAIL after " << test::assertions << " assertions: " << error.what() << '\n';
     return 1;

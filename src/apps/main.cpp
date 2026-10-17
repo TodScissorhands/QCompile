@@ -1,3 +1,5 @@
+#include "compiler/coupling_map.h"
+#include "compiler/router.h"
 #include "compiler/circuit_dag.h"
 #include "compiler/code_generator.h"
 #include "compiler/lexer.h"
@@ -7,6 +9,7 @@
 
 #include <cstddef>
 #include <fstream>
+#include <iomanip>
 #include <iostream>
 #include <stdexcept>
 
@@ -90,17 +93,35 @@ int countSourceLines(const std::vector<Token> &tokens) {
 
 int main(int argc, char *argv[]) {
   if (argc < 2) {
-    std::cerr << "Usage: ./qcompile <path-to-program.txt>\n";
+    std::cerr << "Usage: ./qcompile [--target <line|ring|star|grid|all>] <path-to-program.txt>\n";
     return 1;
   }
 
-  std::string arg = argv[1];
-  if (arg == "--help" || arg == "-h") {
-    std::cout << "Usage: ./qcompile <path-to-program.txt>\n";
-    return 0;
+  std::string filename;
+  std::string targetTopologyType;
+
+  for (int i = 1; i < argc; ++i) {
+    std::string arg = argv[i];
+    if (arg == "--help" || arg == "-h") {
+      std::cout << "Usage: ./qcompile [--target <line|ring|star|grid|all>] <path-to-program.txt>\n";
+      return 0;
+    } else if (arg == "--target" && i + 1 < argc) {
+      targetTopologyType = argv[++i];
+    } else if (arg.rfind("--target=", 0) == 0) {
+      targetTopologyType = arg.substr(9);
+    } else if (!arg.empty() && arg[0] == '-') {
+      std::cerr << "Unknown option: " << arg << "\n";
+      return 1;
+    } else {
+      filename = arg;
+    }
   }
 
-  std::string filename = arg;
+  if (filename.empty()) {
+    std::cerr << "Usage: ./qcompile [--target <line|ring|star|grid|all>] <path-to-program.txt>\n";
+    return 1;
+  }
+
   try {
     std::string source = readSourceFile(filename);
 
@@ -158,6 +179,57 @@ int main(int argc, char *argv[]) {
               << "\n  Optimized measurements: "
               << optDag.gateCount(InstructionType::Measure)
               << '\n';
+
+    if (!targetTopologyType.empty()) {
+      std::size_t physicalQubits = (qubitCount < 2) ? 2 : qubitCount;
+      compiler::CouplingMap topology;
+      std::string topologyName;
+
+      if (targetTopologyType == "line") {
+        topology = compiler::CouplingMap::createLine(physicalQubits);
+        topologyName = "Line (" + std::to_string(physicalQubits) + " physical qubits, " +
+                       std::to_string(topology.edgeCount()) + " coupling edges)";
+      } else if (targetTopologyType == "ring") {
+        topology = compiler::CouplingMap::createRing(physicalQubits);
+        topologyName = "Ring (" + std::to_string(physicalQubits) + " physical qubits, " +
+                       std::to_string(topology.edgeCount()) + " coupling edges)";
+      } else if (targetTopologyType == "star") {
+        topology = compiler::CouplingMap::createStar(physicalQubits, 0);
+        topologyName = "Star (" + std::to_string(physicalQubits) + " physical qubits, center 0, " +
+                       std::to_string(topology.edgeCount()) + " coupling edges)";
+      } else if (targetTopologyType == "grid") {
+        std::size_t cols = 2;
+        std::size_t rows = (physicalQubits + cols - 1) / cols;
+        topology = compiler::CouplingMap::createGrid(rows, cols);
+        topologyName = "Grid (" + std::to_string(rows) + "x" + std::to_string(cols) + ", " +
+                       std::to_string(topology.qubitCount()) + " physical qubits, " +
+                       std::to_string(topology.edgeCount()) + " coupling edges)";
+      } else if (targetTopologyType == "all") {
+        topology = compiler::CouplingMap::createFullyConnected(physicalQubits);
+        topologyName = "FullyConnected (" + std::to_string(physicalQubits) + " physical qubits, " +
+                       std::to_string(topology.edgeCount()) + " coupling edges)";
+      } else {
+        std::cerr << "Unknown target topology: " << targetTopologyType << "\n";
+        return 1;
+      }
+
+      compiler::RoutingResult routing = compiler::routeCircuit(instructions, qubitCount, topology);
+      if (!routing.success) {
+        std::cerr << "Routing error: " << routing.errorMessage << "\n";
+        return 1;
+      }
+
+      std::cout << "\nTopology Routing:\n"
+                << "  Target topology: " << topologyName
+                << "\n  Inserted SWAPs: " << routing.insertedSwapCount
+                << " (decomposed into " << (3 * routing.insertedSwapCount) << " CNOTs)"
+                << "\n  Logical 2Q gates: " << routing.logicalTwoQubitCount
+                << " -> Routed 2Q gates: " << routing.routedTwoQubitCount
+                << "\n  Routing 2Q overhead: +" << std::fixed << std::setprecision(1)
+                << (routing.routingOverhead * 100.0) << "%"
+                << "\n  Logical depth: " << routing.logicalDepth << " layers"
+                << " -> Routed depth: " << routing.routedDepth << " layers\n";
+    }
     printInstructions(instructions);
 
     if (qubitCount > MAX_SIMULATOR_QUBITS) {

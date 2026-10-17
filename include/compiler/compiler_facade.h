@@ -2,7 +2,10 @@
 
 #include "compiler/ast.h"
 #include "compiler/code_generator.h"
+#include "compiler/coupling_map.h"
+#include "compiler/router.h"
 
+#include <optional>
 #include <cstddef>
 #include <string>
 #include <vector>
@@ -24,8 +27,8 @@ struct Diagnostic {
 
 struct CompilerOptions {
   bool optimize = true;
+  std::optional<CouplingMap> targetTopology = std::nullopt;
 };
-
 struct CompilationResult {
   bool success = false;
   std::vector<Diagnostic> diagnostics;
@@ -42,6 +45,17 @@ struct CompilationResult {
   std::size_t optimizedTwoQubitCount = 0;
   std::size_t rawDepth = 0;
   std::size_t optimizedDepth = 0;
+
+  // Milestone 7 Hardware Topology & Routing metrics
+  bool routed = false;
+  std::vector<Instruction> routedInstructions;
+  std::size_t routedGateCount = 0;
+  std::size_t routedTwoQubitCount = 0;
+  std::size_t insertedSwapCount = 0;
+  std::size_t routedDepth = 0;
+  double routingOverhead = 0.0;
+  std::optional<QubitMapping> initialMapping = std::nullopt;
+  std::optional<QubitMapping> finalMapping = std::nullopt;
 
   bool hasErrors() const { return !success; }
   std::vector<std::string> errorMessages() const {

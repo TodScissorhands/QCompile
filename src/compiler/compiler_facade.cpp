@@ -114,6 +114,31 @@ CompilationResult compileProgram(
     result.optimizedDepth = result.rawDepth;
   }
 
+  // 5. Topology Routing (if requested)
+  if (options.targetTopology.has_value()) {
+    RoutingResult routing = routeCircuit(result.instructions, result.qubitCount, *options.targetTopology);
+    if (!routing.success) {
+      Diagnostic diag;
+      diag.severity = DiagnosticSeverity::Error;
+      diag.message = "Topology routing failed: " + routing.errorMessage;
+      diag.line = 0;
+      diag.column = 0;
+      result.diagnostics.push_back(diag);
+      result.success = false;
+      return result;
+    }
+
+    result.routed = true;
+    result.routedInstructions = std::move(routing.routedInstructions);
+    result.routedGateCount = routing.routedGateCount;
+    result.routedTwoQubitCount = routing.routedTwoQubitCount;
+    result.insertedSwapCount = routing.insertedSwapCount;
+    result.routedDepth = routing.routedDepth;
+    result.routingOverhead = routing.routingOverhead;
+    result.initialMapping = routing.initialMapping;
+    result.finalMapping = routing.finalMapping;
+  }
+
   result.success = true;
   return result;
 }
