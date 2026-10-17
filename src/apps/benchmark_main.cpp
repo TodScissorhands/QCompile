@@ -1,6 +1,6 @@
 #include "chemistry/benchmark_catalog.h"
 #include "chemistry/h2_energy.h"
-
+#include "chemistry/molecular_integral_engine.h"
 #include <iomanip>
 #include <iostream>
 #include <stdexcept>
@@ -11,7 +11,8 @@ namespace {
 void printUsage() {
   std::cerr << "Usage: ./qcompile_benchmarks --list | --json-list | "
                "[--json] <benchmark-id> | --generated-h2 <file.qham> | "
-               "--generated-h2-json <file.qham>\n";
+               "--generated-h2-json <file.qham> | --engine-h2 <dist_angstrom> | "
+               "--engine-h2-json <dist_angstrom>\n";
 }
 
 void printJsonString(std::string_view value) {
@@ -174,10 +175,38 @@ int runGeneratedH2(const char *path, bool jsonOutput) {
   }
 }
 
+int runEngineH2(double distance, bool jsonOutput) {
+  try {
+    if (distance < 0.4 || distance > 3.0) {
+      throw std::invalid_argument("H2 bond distance must be in [0.4, 3.0] Angstrom");
+    }
+    MolecularGeometry geom;
+    geom.atoms = {{"H", 1, {0.0, 0.0, 0.0}}, {"H", 1, {0.0, 0.0, distance}}};
+    geom.unit = GeometryUnit::Angstrom;
+    const auto gen = buildMolecularHamiltonian(geom, MappingType::Parity);
+    GeneratedH2 model(distance, distance / 0.52917721092, gen.nuclearRepulsion, gen.fciExactElectronicEnergy, gen.hamiltonian);
+    const auto result = optimizeGeneratedH2(model);
+    if (jsonOutput) {
+      printGeneratedH2Json(model, result);
+    } else {
+      printGeneratedH2Result(model, result);
+    }
+    return 0;
+  } catch (const std::exception &error) {
+    std::cerr << error.what() << '\n';
+    return 1;
+  }
+}
 
 } // namespace
 
 int main(int argc, char *argv[]) {
+  if (argc == 3 && std::string_view(argv[1]) == "--engine-h2") {
+    return runEngineH2(std::stod(argv[2]), false);
+  }
+  if (argc == 3 && std::string_view(argv[1]) == "--engine-h2-json") {
+    return runEngineH2(std::stod(argv[2]), true);
+  }
   if (argc == 3 && std::string_view(argv[1]) == "--generated-h2") {
     return runGeneratedH2(argv[2], false);
   }

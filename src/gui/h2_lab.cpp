@@ -300,10 +300,21 @@ EnergyResult calculateAtGeometry(const QString &root, double distance,
   const QString benchmark = configuredPath(
       "QCOMPILE_LAB_BENCHMARKS",
       QDir(root).filePath("qcompile_benchmarks"));
-  if (!QFileInfo(python).isFile() || !QFileInfo(python).isExecutable()) {
-    throw std::runtime_error(
-        QString("Python interpreter is missing or not executable: %1. Create the pinned generator environment described in benchmarks/heh_plus/GATE_A_STATUS.md from benchmarks/heh_plus/requirements-generator.lock, or set QCOMPILE_LAB_PYTHON to a compatible interpreter.")
-            .arg(python).toStdString());
+  const bool useEngine = (qgetenv("QCOMPILE_LAB_USE_ENGINE") == "1") ||
+      (!QFileInfo(python).isFile() || !QFileInfo(python).isExecutable());
+
+  if (useEngine) {
+    if (!QFileInfo(benchmark).isFile() || !QFileInfo(benchmark).isExecutable()) {
+      throw std::runtime_error(
+          QString("qcompile_benchmarks executable is missing or not executable: %1 (build it with make qcompile_benchmarks or set QCOMPILE_LAB_BENCHMARKS to override)")
+              .arg(benchmark).toStdString());
+    }
+    progress.publish(QString("Computing STO-3G integrals & VQE via C++ engine at %1 Angstrom…")
+                         .arg(distance, 0, 'f', 3));
+    const ProcessResult calculation = runProcess(
+        QStringLiteral("QCompile benchmark"), benchmark,
+        {QStringLiteral("--engine-h2-json"), QString::number(distance, 'g', 17)}, root, token);
+    return parseBenchmarkJson(calculation.standardOutput, distance);
   }
   if (!QFileInfo(generator).isFile()) {
     throw std::runtime_error(
