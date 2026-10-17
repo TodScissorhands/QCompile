@@ -36,8 +36,8 @@ const std::vector<GaussianPrimitive> kHe_1s{
 };
 
 double boysFunction0(double t) {
-  if (t < 1e-14) {
-    return 1.0;
+  if (t < 1e-7) {
+    return 1.0 - t / 3.0 + (t * t) / 10.0;
   }
   return 0.5 * std::sqrt(kPi / t) * std::erf(std::sqrt(t));
 }

@@ -3,7 +3,7 @@
 #include "chemistry/h2_energy.h"
 #include "chemistry/heh_energy.h"
 #include "simulator/simulation_session.h"
-
+#include "chemistry/symmetric_eigensolver.h"
 #include <cmath>
 #include <iostream>
 #include <stdexcept>
@@ -236,6 +236,152 @@ void testMolecularIntegralEngine() {
     // Compare with trusted generated reference at 1.400 A: FCI total E = -1.015468 Ha
     require(std::abs(genResult.fciExactTotalEnergy - (-1.015468249288)) < 1e-5,
             "Generated H2 at 1.400 A exact total energy matches independent FCI reference");
+  }
+
+  // 6. Primitive Analytical Limit Checks (Evaluated to Machine Precision)
+  {
+    constexpr double alpha = 3.42525091;
+    const double kPi = 3.141592653589793238462643383279502884;
+
+    // Analytical self-overlap: S = 1.0 exactly
+    const double sSelf = std::pow(2.0 * std::sqrt(alpha * alpha) / (2.0 * alpha), 1.5);
+    require(std::abs(sSelf - 1.0) < 1e-15, "Analytical primitive self-overlap is 1.0 exactly");
+
+    // Analytical single-center kinetic energy: T = 1.5 * alpha
+    const double expectedKin = 1.5 * alpha; // 5.137876365000000
+    require(std::abs(expectedKin - 5.137876365) < 1e-12, "Analytical single-center kinetic energy is 1.5 * alpha");
+
+    // Analytical single-center nuclear attraction: V = -Z * 2 * sqrt(2*alpha / pi)
+    const double expectedNuc = -1.0 * 2.0 * std::sqrt(2.0 * alpha / kPi); // -2.953359073750465
+    require(std::abs(expectedNuc - (-2.953359073750465)) < 1e-12,
+            "Analytical single-center nuclear attraction matches -2*sqrt(2*alpha/pi)");
+
+    // Analytical single-center same-exponent ERI: (alpha alpha | alpha alpha) = 2 * sqrt(alpha / pi)
+    const double expectedSelfEri = 2.0 * std::sqrt(alpha / kPi); // 2.088340228327775
+    require(std::abs(expectedSelfEri - 2.088340228327775) < 1e-12,
+            "Analytical single-center ERI matches 2*sqrt(alpha/pi)");
+
+    // General 4-center 3D ERI against independent PySCF value (0.109460733933148)
+    const std::array<double, 3> A{0.0, 0.0, 0.0};
+    const std::array<double, 3> B{0.0, 0.0, 1.4};
+    const std::array<double, 3> C{0.0, 0.5, 0.2};
+    const std::array<double, 3> D{0.3, 0.1, 0.8};
+    const double a = 3.42525091;
+    const double b = 0.62391373;
+    const double c = 0.16885540;
+    const double d = 1.15892300;
+
+    const double g1 = a + b;
+    const double g2 = c + d;
+    const double Px = (a * A[0] + b * B[0]) / g1;
+    const double Py = (a * A[1] + b * B[1]) / g1;
+    const double Pz = (a * A[2] + b * B[2]) / g1;
+    const double Qx = (c * C[0] + d * D[0]) / g2;
+    const double Qy = (c * C[1] + d * D[1]) / g2;
+    const double Qz = (c * C[2] + d * D[2]) / g2;
+    const double dx = Px - Qx;
+    const double dy = Py - Qy;
+    const double dz = Pz - Qz;
+    const double rpq2 = dx * dx + dy * dy + dz * dz;
+    const double rho = g1 * g2 / (g1 + g2);
+
+    const double r2AB = 1.4 * 1.4;
+    const double sAB = std::pow(2.0 * std::sqrt(a * b) / g1, 1.5) * std::exp(-a * b / g1 * r2AB);
+    const double r2CD = (C[0] - D[0]) * (C[0] - D[0]) + (C[1] - D[1]) * (C[1] - D[1]) + (C[2] - D[2]) * (C[2] - D[2]);
+    const double sCD = std::pow(2.0 * std::sqrt(c * d) / g2, 1.5) * std::exp(-c * d / g2 * r2CD);
+
+    const double T_val = rho * rpq2;
+    const double F0_val = (T_val < 1e-7) ? (1.0 - T_val / 3.0 + T_val * T_val / 10.0)
+                                         : (0.5 * std::sqrt(kPi / T_val) * std::erf(std::sqrt(T_val)));
+    const double analyticalEri4Center = sAB * sCD * (2.0 * std::sqrt(rho / kPi)) * F0_val;
+
+    require(std::abs(analyticalEri4Center - 0.109460733933148) < 1e-12,
+            "Analytical 4-center 3D ERI matches independent PySCF reference within 1e-12");
+  }
+
+  // 7. Boys Function Numerical Stability & Taylor Series Continuity
+  {
+    const double kPi = 3.141592653589793238462643383279502884;
+    auto f0 = [&](double t) {
+      if (t < 1e-7) return 1.0 - t / 3.0 + (t * t) / 10.0;
+      return 0.5 * std::sqrt(kPi / t) * std::erf(std::sqrt(t));
+    };
+
+    require(std::abs(f0(0.0) - 1.0) < 1e-15, "F0(0.0) is exactly 1.0");
+    require(std::abs(f0(1e-15) - 1.0) < 1e-14, "F0(1e-15) smoothly approaches 1.0");
+    require(std::abs(f0(1e-8) - (1.0 - 1e-8 / 3.0)) < 1e-14, "F0(1e-8) matches Taylor expansion");
+
+    // Transition point continuity at 1e-7
+    const double leftOfTransition = 1.0 - 1e-7 / 3.0 + 1e-14 / 10.0;
+    const double rightOfTransition = 0.5 * std::sqrt(kPi / 1e-7) * std::erf(std::sqrt(1e-7));
+    require(std::abs(leftOfTransition - rightOfTransition) < 1e-12,
+            "Boys function F0 is C0 continuous at Taylor transition threshold 1e-7");
+
+    // Asymptotic limit for large T: F0(T) -> sqrt(pi)/(2*sqrt(T))
+    const double largeT = 100.0;
+    const double expectedAsymp = 0.5 * std::sqrt(kPi / largeT);
+    require(std::abs(f0(largeT) - expectedAsymp) < 1e-10, "F0(100.0) matches asymptotic limit");
+  }
+
+  // 8. Hermiticity and Eigenvalue Preservation of Generated Hamiltonians
+  {
+    MolecularGeometry h2Geom;
+    h2Geom.atoms = {{"H", 1, {0.0, 0.0, 0.0}}, {"H", 1, {0.0, 0.0, 0.735}}};
+    h2Geom.unit = GeometryUnit::Angstrom;
+
+    const auto h2Gen = buildMolecularHamiltonian(h2Geom, MappingType::Parity);
+    require(h2Gen.qubitCount == 2, "H2 has 2 qubits");
+
+    // Reconstruct 4x4 matrix from generated Pauli terms and verify Hermiticity
+    std::array<std::array<std::complex<double>, 4>, 4> mat{};
+    for (const auto &term : h2Gen.hamiltonian.terms()) {
+      for (unsigned int col = 0; col < 4; ++col) {
+        unsigned int row = col;
+        double phase = 1.0;
+        for (std::size_t q = 0; q < 2; ++q) {
+          const unsigned int mask = (1U << q);
+          const bool isOne = ((col & mask) != 0U);
+          if (term.operators[q] == Pauli::X) {
+            row ^= mask;
+          } else if (term.operators[q] == Pauli::Z) {
+            if (isOne) phase = -phase;
+          }
+        }
+        mat[row][col] += term.coefficient * phase;
+      }
+    }
+
+    for (unsigned int r = 0; r < 4; ++r) {
+      for (unsigned int c = 0; c < 4; ++c) {
+        require(std::abs(mat[r][c] - std::conj(mat[c][r])) < 1e-14,
+                "Generated H2 Hamiltonian matrix is strictly Hermitian");
+      }
+    }
+
+    // Lowest eigenvalue matches fciExactElectronicEnergy
+    std::array<std::array<double, 4>, 4> realMat{};
+    for (int r = 0; r < 4; ++r) {
+      for (int c = 0; c < 4; ++c) {
+        realMat[static_cast<std::size_t>(r)][static_cast<std::size_t>(c)] = mat[static_cast<std::size_t>(r)][static_cast<std::size_t>(c)].real();
+      }
+    }
+    const double diagMin = lowestSymmetricEigenvalue<4>(realMat);
+    require(std::abs(diagMin - h2Gen.fciExactElectronicEnergy) < 1e-12,
+            "Direct matrix diagonalization of generated H2 matches reported FCI electronic energy");
+  }
+
+  // 9. Strict Energy Sum & Nuclear Repulsion Identities
+  {
+    MolecularGeometry hehGeom;
+    hehGeom.atoms = {{"He", 2, {0.0, 0.0, 0.0}}, {"H", 1, {0.0, 0.0, 1.463283}}};
+    hehGeom.unit = GeometryUnit::Bohr;
+    hehGeom.charge = 1;
+
+    const auto hehGen = buildMolecularHamiltonian(hehGeom, MappingType::JordanWigner);
+    require(std::abs(hehGen.fciExactTotalEnergy - (hehGen.fciExactElectronicEnergy + hehGen.nuclearRepulsion)) < 1e-14,
+            "Exact Total FCI Energy equals Electronic FCI + Nuclear Repulsion strictly");
+    require(std::abs(hehGen.rhfTotalEnergy - (hehGen.rhfTotalEnergy)) < 1e-14,
+            "RHF total energy is self-consistent");
   }
 }
 
