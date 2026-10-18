@@ -5,6 +5,7 @@
 
 #include <complex>
 #include <cstddef>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -52,6 +53,8 @@ struct ExperimentBundle {
   double variationalError = 0.0;
   int energyEvaluations = 0;
   bool converged = false;
+  std::optional<double> optimizerParameterRadians;
+  std::optional<double> referenceElectronicEnergy;
 
   // Real optimizer convergence trajectory (optional)
   bool hasConvergence = false;

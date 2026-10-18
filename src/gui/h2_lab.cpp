@@ -808,6 +808,7 @@ public:
   }
 
   const std::vector<VqeConvergencePoint> &points() const { return points_; }
+  double exactReference() const { return exactReference_; }
 
 protected:
   void paintEvent(QPaintEvent *) override {
@@ -1281,7 +1282,9 @@ private:
 
     // Connect signals
     connect(compileBtn_, &QPushButton::clicked, [this] { compileDsl(); });
-    connect(optimizeCheck_, &QCheckBox::toggled, [this] { compileDsl(); });
+    connect(optimizeCheck_, &QCheckBox::toggled, [this] {
+      if (!isCompiling_) compileDsl();
+    });
     connect(exampleCombo_, qOverload<int>(&QComboBox::currentIndexChanged), [this](int idx) { loadPresetExample(idx); });
     connect(circuitResetBtn_, &QPushButton::clicked, [this] { circuitReset(); });
     connect(circuitStepBackBtn_, &QPushButton::clicked, [this] { circuitStepBackward(); });
@@ -1752,6 +1755,131 @@ private:
     return compContainer;
   }
 
+  void clearLoadedChemistryPresentation() {
+    playbackTimer_.stop();
+    latestResult_.reset();
+    plotResults_.clear();
+    currentSweepResults_.clear();
+
+    if (stepSlider_) stepSlider_->setValue(0);
+    if (energyGeometry_) energyGeometry_->setText(QStringLiteral("—"));
+    if (electronicValue_) electronicValue_->setText(QStringLiteral("—"));
+    if (nuclearValue_) nuclearValue_->setText(QStringLiteral("—"));
+    if (totalValue_) totalValue_->setText(QStringLiteral("—"));
+    if (exactValue_) exactValue_->setText(QStringLiteral("—"));
+    if (referenceValue_) referenceValue_->setText(QStringLiteral("—"));
+    if (errorValue_) errorValue_->setText(QStringLiteral("—"));
+    if (optimizerValue_) optimizerValue_->setText(QStringLiteral("No saved chemistry result"));
+    if (progressLabel_) progressLabel_->setText(QStringLiteral("No chemistry result saved in this bundle."));
+    if (predictionFeedback_) predictionFeedback_->setText(QStringLiteral("No sweep results are stored in this bundle."));
+    if (explanation_) explanation_->setText(QStringLiteral("No saved sweep comparison is available."));
+    if (convergencePlot_) convergencePlot_->reset(0.0, QStringLiteral("H2"));
+    if (vqeStatusLabel_) vqeStatusLabel_->setText(QStringLiteral("No saved convergence trajectory."));
+    if (energyPlot_) updateEnergyPlotSeries();
+
+    refreshCircuit();
+    refreshState();
+    updatePreviewLabels();
+  }
+
+  void restoreSavedChemistryPresentation(const ExperimentBundle &bundle) {
+    if (bundle.hasChemistry) {
+      const QString formula = QString::fromStdString(bundle.formula);
+      const QString units = QString::fromStdString(bundle.distanceUnits);
+      constexpr double kBohrToAngstrom = 0.52917721092;
+      double distanceAngstrom = 0.0;
+      double distanceBohr = 0.0;
+      const bool hasAngstromDistance = bundle.distanceUnits == "Angstrom";
+      const bool hasBohrDistance = bundle.distanceUnits == "bohr";
+      if (hasAngstromDistance) {
+        distanceAngstrom = bundle.distance;
+        distanceBohr = bundle.distance / kBohrToAngstrom;
+      } else if (hasBohrDistance) {
+        distanceBohr = bundle.distance;
+        distanceAngstrom = bundle.distance * kBohrToAngstrom;
+      }
+
+      if (energyGeometry_) {
+        if (hasAngstromDistance) {
+          energyGeometry_->setText(QStringLiteral("%1 Å (%2 bohr)")
+                                       .arg(distanceAngstrom, 0, 'f', 6)
+                                       .arg(distanceBohr, 0, 'f', 9));
+        } else if (hasBohrDistance) {
+          energyGeometry_->setText(QStringLiteral("%1 bohr (%2 Å)")
+                                       .arg(distanceBohr, 0, 'f', 9)
+                                       .arg(distanceAngstrom, 0, 'f', 6));
+        } else {
+          energyGeometry_->setText(QStringLiteral("%1 %2")
+                                       .arg(bundle.distance, 0, 'g', 12)
+                                       .arg(units.isEmpty() ? QStringLiteral("(unit not saved)") : units));
+        }
+      }
+      if (electronicValue_) electronicValue_->setText(formattedEnergy(bundle.electronicEnergy));
+      if (nuclearValue_) nuclearValue_->setText(formattedEnergy(bundle.nuclearRepulsion));
+      if (totalValue_) totalValue_->setText(formattedEnergy(bundle.totalEnergy));
+      if (exactValue_) exactValue_->setText(formattedEnergy(bundle.exactElectronicEnergy));
+      if (referenceValue_) {
+        referenceValue_->setText(bundle.referenceElectronicEnergy
+                                     ? formattedEnergy(*bundle.referenceElectronicEnergy)
+                                     : QStringLiteral("Not saved in this bundle"));
+      }
+      if (errorValue_) errorValue_->setText(formattedEnergy(bundle.variationalError));
+      if (optimizerValue_) {
+        const QString parameter = bundle.optimizerParameterRadians
+            ? QString::number(*bundle.optimizerParameterRadians, 'f', 9) + QStringLiteral(" rad")
+            : QStringLiteral("not saved");
+        optimizerValue_->setText(QStringLiteral("%1 evaluations · %2 · θ=%3")
+                                     .arg(bundle.energyEvaluations)
+                                     .arg(bundle.converged ? QStringLiteral("converged") : QStringLiteral("not converged"))
+                                     .arg(parameter));
+      }
+
+      EnergyResult result;
+      result.distanceAngstrom = distanceAngstrom;
+      result.distanceBohr = distanceBohr;
+      result.parameter = bundle.optimizerParameterRadians.value_or(0.0);
+      result.electronicEnergy = bundle.electronicEnergy;
+      result.exactElectronicEnergy = bundle.exactElectronicEnergy;
+      result.referenceElectronicEnergy = bundle.referenceElectronicEnergy.value_or(0.0);
+      result.variationalError = bundle.variationalError;
+      result.nuclearRepulsionEnergy = bundle.nuclearRepulsion;
+      result.totalEnergy = bundle.totalEnergy;
+      result.exactTotalEnergy = bundle.exactTotalEnergy;
+      result.evaluations = bundle.energyEvaluations;
+      result.converged = bundle.converged;
+      if (bundle.formula == "H2" && (hasAngstromDistance || hasBohrDistance)) {
+        plotResults_.push_back(result);
+        if (bundle.optimizerParameterRadians) latestResult_ = result;
+        if (distanceSpin_) distanceSpin_->setValue(distanceAngstrom);
+      }
+      if (progressLabel_) {
+        progressLabel_->setText(QStringLiteral("Loaded saved %1 chemistry summary; values were not recalculated.")
+                                    .arg(formula.isEmpty() ? QStringLiteral("molecule") : formula));
+      }
+    } else if (progressLabel_) {
+      progressLabel_->setText(QStringLiteral("No chemistry result was saved; no prior result is being shown."));
+    }
+
+    if (convergencePlot_) {
+      const QString molecule = QString::fromStdString(
+          !bundle.formula.empty() ? bundle.formula :
+          (!bundle.moleculeName.empty() ? bundle.moleculeName : "H2"));
+      convergencePlot_->reset(bundle.hasChemistry ? bundle.exactTotalEnergy : 0.0, molecule);
+      if (bundle.hasConvergence) {
+        for (const auto &point : bundle.convergenceTrajectory) convergencePlot_->addPoint(point);
+      }
+    }
+    if (vqeStatusLabel_) {
+      vqeStatusLabel_->setText(bundle.hasConvergence
+                                   ? QStringLiteral("Loaded saved convergence data; optimizer was not rerun.")
+                                   : QStringLiteral("No convergence trajectory was saved."));
+    }
+    if (energyPlot_) updateEnergyPlotSeries();
+    refreshCircuit();
+    refreshState();
+    updatePreviewLabels();
+  }
+
   bool saveCurrentExperiment(const QString &suggestedPath = QString()) {
     QString path = suggestedPath;
     if (path.isEmpty()) {
@@ -1808,6 +1936,8 @@ private:
         b.variationalError = latestResult_->variationalError;
         b.energyEvaluations = latestResult_->evaluations;
         b.converged = latestResult_->converged;
+        b.optimizerParameterRadians = latestResult_->parameter;
+        b.referenceElectronicEnergy = latestResult_->referenceElectronicEnergy;
       }
 
       if (convergencePlot_ && !convergencePlot_->points().empty()) {
@@ -1819,8 +1949,12 @@ private:
       compileStatusLabel_->setText(QStringLiteral("SAVED · %1").arg(QFileInfo(path).fileName()));
       return true;
     } catch (const std::exception &err) {
+      const QString message = QString::fromLocal8Bit(err.what());
+      compileStatusLabel_->setText(QStringLiteral("SAVE FAILED · ") + message);
+      compileStatusLabel_->setStyleSheet(QStringLiteral("color:#f43f5e;font-weight:bold;"));
+      if (appStatus_) appStatus_->setText(QStringLiteral("Experiment was not saved: ") + message);
       if (!smokeTest_) {
-        QMessageBox::critical(this, QStringLiteral("Save Error"), QString::fromStdString(err.what()));
+        QMessageBox::critical(this, QStringLiteral("Save Error"), message);
       }
       return false;
     }
@@ -1836,49 +1970,101 @@ private:
     }
     if (path.isEmpty()) return false;
 
+    bool loadedSourceApplied = false;
     try {
-      const ExperimentBundle b = loadExperimentBundle(path.toStdString());
+      const ExperimentBundle bundle = loadExperimentBundle(path.toStdString());
+      loadedSourceApplied = true;
+      circuitPlayTimer_.stop();
+      clearLoadedChemistryPresentation();
+
       isCompiling_ = true;
-      if (dslEditor_) {
-        dslEditor_->setPlainText(QString::fromStdString(b.dslSource));
-      }
-      if (optimizeCheck_) {
-        optimizeCheck_->setChecked(b.optimize);
-      }
+      if (dslEditor_) dslEditor_->setPlainText(QString::fromStdString(bundle.dslSource));
+      if (optimizeCheck_) optimizeCheck_->setChecked(bundle.optimize);
       isCompiling_ = false;
 
       compileDsl();
-
-      if (circuitSession_ && b.currentStep <= circuitSession_->totalSteps()) {
-        circuitSession_->seek(b.currentStep);
-        if (circuitStepSlider_) {
-          circuitStepSlider_->blockSignals(true);
-          circuitStepSlider_->setValue(static_cast<int>(b.currentStep));
-          circuitStepSlider_->blockSignals(false);
+      if (!lastCompilation_.success) {
+        if (appStatus_) {
+          appStatus_->setText(QStringLiteral("Bundle source was loaded, but compilation failed; previous run output was cleared."));
         }
-        if (circuitView_) {
-          circuitView_->setCurrentStep(b.currentStep);
+        return false;
+      }
+      if (!circuitSession_) {
+        if (appStatus_) {
+          appStatus_->setText(QStringLiteral("Bundle source compiled, but simulation could not initialize; previous run output was cleared."));
         }
-        refreshCircuitStateInspection();
+        return false;
+      }
+      if (bundle.currentStep > circuitSession_->totalSteps()) {
+        const QString message = QStringLiteral("saved execution step %1 exceeds the compiled circuit length %2")
+                                    .arg(bundle.currentStep)
+                                    .arg(circuitSession_->totalSteps());
+        compileStatusLabel_->setText(QStringLiteral("OPEN FAILED · ") + message);
+        if (appStatus_) appStatus_->setText(QStringLiteral("Bundle source is loaded; execution remains at step 0."));
+        return false;
       }
 
-      if (b.hasConvergence && convergencePlot_) {
-        const double ref = b.hasChemistry ? b.exactTotalEnergy : 0.0;
-        convergencePlot_->reset(ref, QString::fromStdString(b.formula.empty() ? b.moleculeName : b.formula));
-        for (const auto &pt : b.convergenceTrajectory) {
-          convergencePlot_->addPoint(pt);
+      try {
+        circuitSession_->seek(bundle.currentStep);
+      } catch (const std::exception &error) {
+        handleCircuitExecutionFailure(error);
+        if (appStatus_) appStatus_->setText(QStringLiteral("Bundle source loaded, but replay failed; the last valid simulation step is shown."));
+        return false;
+      }
+      updateCircuitExecutionDisplay();
+
+      bool replayMatches = true;
+      if (!bundle.statevector.empty()) {
+        const auto &state = circuitSession_->currentState();
+        replayMatches = bundle.totalSteps == circuitSession_->totalSteps() &&
+                        bundle.isComplete == circuitSession_->isComplete() &&
+                        circuitSession_->currentStep() == bundle.currentStep &&
+                        state.size() == bundle.statevector.size() &&
+                        std::abs(circuitSession_->stateNorm() - bundle.stateNorm) <= 1e-12;
+        for (std::size_t i = 0; replayMatches && i < state.size(); ++i) {
+          replayMatches = std::abs(state[i] - bundle.statevector[i]) <= 1e-12;
         }
       }
+      if (replayMatches && !bundle.basisProbabilities.empty()) {
+        const auto probabilities = circuitSession_->basisProbabilities();
+        replayMatches = probabilities.size() == bundle.basisProbabilities.size();
+        for (std::size_t i = 0; replayMatches && i < probabilities.size(); ++i) {
+          replayMatches = std::abs(probabilities[i] - bundle.basisProbabilities[i]) <= 1e-12;
+        }
+      }
+      for (const auto &measurement : bundle.recordedMeasurements) {
+        if (!replayMatches) break;
+        const auto replayed = circuitSession_->measurementResultAt(measurement.first);
+        replayMatches = replayed.has_value() && *replayed == measurement.second;
+      }
+      if (!replayMatches) {
+        compileStatusLabel_->setText(QStringLiteral("OPEN FAILED · saved simulation data do not match deterministic replay"));
+        if (appStatus_) appStatus_->setText(QStringLiteral("Bundle source is loaded; the newly replayed state is shown, not the inconsistent saved snapshot."));
+        return false;
+      }
 
+      restoreSavedChemistryPresentation(bundle);
       compileStatusLabel_->setText(QStringLiteral("OPENED · %1").arg(QFileInfo(path).fileName()));
+      if (appStatus_) {
+        appStatus_->setText(QStringLiteral("Saved experiment opened; source recompiled and execution replayed. Chemistry values were not recalculated."));
+      }
       return true;
     } catch (const std::exception &err) {
+      isCompiling_ = false;
+      const QString message = QString::fromLocal8Bit(err.what());
+      compileStatusLabel_->setText(QStringLiteral("OPEN FAILED · ") + message);
+      if (appStatus_) {
+        appStatus_->setText(loadedSourceApplied
+                                ? QStringLiteral("Loaded source remains visible; unrelated previous run output was cleared.")
+                                : QStringLiteral("Bundle was not opened; the existing experiment remains unchanged."));
+      }
       if (!smokeTest_) {
-        QMessageBox::critical(this, QStringLiteral("Open Error"), QString::fromStdString(err.what()));
+        QMessageBox::critical(this, QStringLiteral("Open Error"), message);
       }
       return false;
     }
   }
+
 
   bool exportCircuitToSvgFile(const QString &suggestedPath = QString()) {
     QString path = suggestedPath;
@@ -2380,6 +2566,10 @@ private:
         stepText);
 
     try {
+      if (smokeTest_ && injectNextSessionInitializationFailureForSmoke_) {
+        injectNextSessionInitializationFailureForSmoke_ = false;
+        throw std::length_error("Test-injected simulator initialization resource limit");
+      }
       circuitSession_ = std::make_unique<SimulationSession>(instructions, qubitCount);
     } catch (const std::exception &error) {
       clearCircuitSimulationPresentation(
@@ -3090,19 +3280,115 @@ private:
       return;
     }
 
-    // 1b. Test Experiment Persistence & Export in Circuit Workbench
+    // 1b. Save and reopen a stepped Bell run with attached saved chemistry metadata.
     const QString smokeQcomp = QStringLiteral("/tmp/smoke_exp.qcomp");
     const QString smokeSvg = QStringLiteral("/tmp/smoke_circ.svg");
     const QString smokePng = QStringLiteral("/tmp/smoke_circ.png");
     const QString smokeCsv = QStringLiteral("/tmp/smoke_conv.csv");
+    const QString invalidOpenPath = QStringLiteral("/tmp/smoke_invalid_open.qcomp");
+    const QString initFailurePath = QStringLiteral("/tmp/smoke_init_failure.qcomp");
+    optimizeCheck_->setChecked(false);
+    loadPresetExample(0);
+    for (int step = 0; step < 3; ++step) circuitStepFwdBtn_->click();
+    if (!circuitSession_ || circuitSession_->currentStep() != 3 ||
+        !circuitSession_->lastMeasurementResult()) {
+      finishSmokeTest(false, QStringLiteral("Bell persistence fixture did not reach its recorded measurement"));
+      return;
+    }
+
+    EnergyResult savedResult;
+    savedResult.distanceAngstrom = 0.735;
+    savedResult.distanceBohr = 0.735 / 0.52917721092;
+    savedResult.parameter = 0.123456789;
+    savedResult.electronicEnergy = -1.857275030202;
+    savedResult.exactElectronicEnergy = -1.857275030202;
+    savedResult.referenceElectronicEnergy = -1.857275030202;
+    savedResult.nuclearRepulsionEnergy = 0.719968994449;
+    savedResult.totalEnergy = -1.137306035753;
+    savedResult.exactTotalEnergy = -1.137306035753;
+    savedResult.evaluations = 62;
+    savedResult.converged = true;
+    latestResult_ = savedResult;
+    plotResults_ = {savedResult};
+    currentSweepResults_ = {savedResult};
+    updateResultFields(savedResult);
+    updateEnergyPlotSeries();
+    if (convergencePlot_) {
+      convergencePlot_->reset(savedResult.exactTotalEnergy, QStringLiteral("H2"));
+      convergencePlot_->addPoint({1, 0.0, 0.0, savedResult.electronicEnergy,
+                                  savedResult.totalEnergy, true});
+      convergencePlot_->addPoint({2, savedResult.parameter, 0.0, savedResult.electronicEnergy,
+                                  savedResult.totalEnergy, true});
+    }
     if (!saveCurrentExperiment(smokeQcomp) || !QFileInfo::exists(smokeQcomp)) {
       finishSmokeTest(false, QStringLiteral("saveCurrentExperiment failed to write .qcomp file"));
       return;
     }
-    if (!openExperimentFile(smokeQcomp)) {
-      finishSmokeTest(false, QStringLiteral("openExperimentFile failed to load .qcomp file"));
+    const ExperimentBundle savedBundle = loadExperimentBundle(smokeQcomp.toStdString());
+    if (savedBundle.dslSource != dslEditor_->toPlainText().toStdString() ||
+        savedBundle.optimize || savedBundle.currentStep != 3 ||
+        savedBundle.recordedMeasurements.size() != 1 ||
+        savedBundle.recordedMeasurements[0].second != *circuitSession_->lastMeasurementResult() ||
+        !savedBundle.optimizerParameterRadians ||
+        std::abs(*savedBundle.optimizerParameterRadians - savedResult.parameter) > 1e-15 ||
+        !savedBundle.referenceElectronicEnergy ||
+        savedBundle.convergenceTrajectory.size() != 2) {
+      finishSmokeTest(false, QStringLiteral("saved .qcomp bundle omitted source, options, session, chemistry, or convergence data"));
       return;
     }
+
+    // A rejected unsupported save must preserve the previously valid destination.
+    compileSmokeSource(QStringLiteral("qubit %1\nH q0\nmeasure q0\n")
+                           .arg(unsupportedQubits.join(QStringLiteral(", "))));
+    const bool rejectedSave = !saveCurrentExperiment(smokeQcomp);
+    const ExperimentBundle afterRejectedSave = loadExperimentBundle(smokeQcomp.toStdString());
+    if (!rejectedSave ||
+        !compileStatusLabel_->text().contains(QStringLiteral("SAVE FAILED")) ||
+        afterRejectedSave.id != savedBundle.id ||
+        afterRejectedSave.dslSource != savedBundle.dslSource ||
+        afterRejectedSave.title != savedBundle.title) {
+      finishSmokeTest(false, QStringLiteral("rejected save replaced or falsely reported success for the valid destination"));
+      return;
+    }
+
+    if (!openExperimentFile(smokeQcomp) || !circuitSession_) {
+      finishSmokeTest(false, QStringLiteral("openExperimentFile failed to restore the valid bundle"));
+      return;
+    }
+    const auto &restoredState = circuitSession_->currentState();
+    bool restoredStateMatches = restoredState.size() == savedBundle.statevector.size();
+    for (std::size_t i = 0; restoredStateMatches && i < restoredState.size(); ++i) {
+      restoredStateMatches = std::abs(restoredState[i] - savedBundle.statevector[i]) <= 1e-12;
+    }
+    bool inspectorMatches = circuitStateTable_->rowCount() == 4;
+    for (std::size_t i = 0; inspectorMatches && i < savedBundle.basisProbabilities.size(); ++i) {
+      const auto *probability = circuitStateTable_->item(static_cast<int>(i), 2);
+      inspectorMatches = probability &&
+          std::abs(probability->text().toDouble() - savedBundle.basisProbabilities[i]) <= 1e-6;
+    }
+    if (dslEditor_->toPlainText().toStdString() != savedBundle.dslSource ||
+        optimizeCheck_->isChecked() || circuitSession_->currentStep() != 3 ||
+        circuitStepSlider_->value() != 3 || circuitView_->currentStep() != 3 ||
+        !circuitSession_->lastMeasurementResult() ||
+        *circuitSession_->lastMeasurementResult() != savedBundle.recordedMeasurements[0].second ||
+        !restoredStateMatches || !inspectorMatches ||
+        !latestResult_ || std::abs(latestResult_->parameter - savedResult.parameter) > 1e-15 ||
+        plotResults_.size() != 1 || !currentSweepResults_.empty() ||
+        !convergencePlot_ || convergencePlot_->points().size() != 2 ||
+        std::abs(convergencePlot_->exactReference() - savedResult.exactTotalEnergy) > 1e-15 ||
+        !appStatus_->text().contains(QStringLiteral("not recalculated")) ||
+        !circuitMeasurementBanner_->text().contains(QString::fromStdString(savedBundle.recordedMeasurements[0].second))) {
+      finishSmokeTest(false, QStringLiteral("reopening .qcomp did not restore source, measurement, selected step, or saved-result metadata consistently"));
+      return;
+    }
+    const auto &h2Series = energyPlot_->seriesList();
+    if (h2Series.empty() || h2Series[0].points.size() != 1 ||
+        std::abs(h2Series[0].points[0].totalEnergy - savedResult.totalEnergy) > 1e-15 ||
+        !optimizerValue_->text().contains(QStringLiteral("θ=0.123456789 rad"))) {
+      finishSmokeTest(false, QStringLiteral("saved chemistry summary was not restored as saved data"));
+      return;
+    }
+
     if (!exportCircuitToSvgFile(smokeSvg) || !QFileInfo::exists(smokeSvg)) {
       finishSmokeTest(false, QStringLiteral("exportCircuitToSvgFile failed to write SVG"));
       return;
@@ -3119,6 +3405,59 @@ private:
     QFile::remove(smokePng);
     QFile::remove(smokeCsv);
 
+    // A source-compilation failure after parsing must not display OPENED or retain prior output.
+    ExperimentBundle invalidSourceBundle;
+    invalidSourceBundle.dslSource = "qubit q0\nH missing\n";
+    saveExperimentBundle(invalidOpenPath.toStdString(), invalidSourceBundle);
+    if (openExperimentFile(invalidOpenPath) || !compileStatusLabel_->text().contains(QStringLiteral("COMPILATION FAILED")) ||
+        compileStatusLabel_->text().contains(QStringLiteral("OPENED")) ||
+        dslEditor_->toPlainText() != QStringLiteral("qubit q0\nH missing\n") ||
+        circuitSession_ || latestResult_ ||
+        circuitStateTable_->rowCount() != 0 || !circuitMeasurementBanner_->isHidden() ||
+        !convergencePlot_->points().empty()) {
+      finishSmokeTest(false, QStringLiteral("failed compilation while opening a bundle left stale output or reported success"));
+      return;
+    }
+    if (!openExperimentFile(smokeQcomp)) {
+      finishSmokeTest(false, QStringLiteral("valid saved bundle did not reopen after a compilation failure"));
+      return;
+    }
+
+    // Inject initialization failure at the actual compilation-to-session boundary.
+    ExperimentBundle initFailureBundle;
+    initFailureBundle.dslSource = "qubit q0\nH q0\nmeasure q0\n";
+    initFailureBundle.qubitCount = 1;
+    initFailureBundle.rawInstructions = {
+        {InstructionType::ApplyGate, "H", {0}, 0.0},
+        {InstructionType::Measure, "measure", {0}, 0.0}};
+    initFailureBundle.instructions = initFailureBundle.rawInstructions;
+    saveExperimentBundle(initFailurePath.toStdString(), initFailureBundle);
+    injectNextSessionInitializationFailureForSmoke_ = true;
+    if (openExperimentFile(initFailurePath) || !compileStatusLabel_->text().contains(QStringLiteral("SIMULATOR RESOURCE LIMIT")) ||
+        compileStatusLabel_->text().contains(QStringLiteral("OPENED")) || !lastCompilation_.success ||
+        circuitSession_ || circuitView_->qubitCount() != 1 || circuitView_->instructionCount() != 2 ||
+        !circuitMeasurementBanner_->isHidden() || circuitStateTable_->rowCount() != 0 ||
+        circuitStepSlider_->isEnabled() || circuitPlayBtn_->isEnabled() ||
+        latestResult_ || !plotResults_.empty() || !currentSweepResults_.empty() ||
+        !convergencePlot_->points().empty() || energyGeometry_->text() != QStringLiteral("—")) {
+      finishSmokeTest(false, QStringLiteral("simulator initialization failure while opening a bundle left stale output or reported success"));
+      return;
+    }
+    if (!openExperimentFile(smokeQcomp)) {
+      finishSmokeTest(false, QStringLiteral("valid saved bundle did not reopen after initialization failure"));
+      return;
+    }
+
+    // Opening a valid circuit-only bundle clears saved results from the prior H2 run.
+    if (!openExperimentFile(initFailurePath) || latestResult_ || !plotResults_.empty() ||
+        !currentSweepResults_.empty() || !convergencePlot_->points().empty() ||
+        energyGeometry_->text() != QStringLiteral("—") ||
+        !progressLabel_->text().contains(QStringLiteral("No chemistry result"))) {
+      finishSmokeTest(false, QStringLiteral("circuit-only bundle retained chemistry or convergence data from another run"));
+      return;
+    }
+    QFile::remove(invalidOpenPath);
+    QFile::remove(initFailurePath);
     // 1b. Test HeH+ 4-qubit circuit preset in Circuit Workbench
     optimizeCheck_->setChecked(false);
     exampleCombo_->setCurrentIndex(4);
@@ -3375,6 +3714,7 @@ private:
   std::unique_ptr<SimulationSession> circuitSession_;
   std::size_t circuitAvailableStepLimit_ = 0;
   bool injectNextCircuitStepResourceFailureForSmoke_ = false;
+  bool injectNextSessionInitializationFailureForSmoke_ = false;
   bool isCompiling_ = false;
 
   // Milestone 4: Persistence, Comparison & Export

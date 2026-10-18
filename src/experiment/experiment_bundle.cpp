@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cctype>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -12,6 +13,7 @@
 #include <limits>
 #include <map>
 #include <memory>
+#include <set>
 #include <sstream>
 #include <stdexcept>
 #include <string_view>
@@ -49,6 +51,27 @@ struct JsonValue {
     return objVal.find(key) != objVal.end();
   }
 };
+
+std::size_t parseJsonSize(const JsonValue &value, std::string_view field) {
+  constexpr double maxExactJsonInteger = 9007199254740991.0;
+  if (!value.isNumber() || value.numVal < 0.0 || std::floor(value.numVal) != value.numVal ||
+      value.numVal > maxExactJsonInteger ||
+      static_cast<long double>(value.numVal) >
+          static_cast<long double>(std::numeric_limits<std::size_t>::max())) {
+    throw std::runtime_error("Invalid non-negative integer in .qcomp field '" +
+                             std::string(field) + "'");
+  }
+  return static_cast<std::size_t>(value.numVal);
+}
+
+int parseJsonInt(const JsonValue &value, std::string_view field) {
+  if (!value.isNumber() || std::floor(value.numVal) != value.numVal ||
+      value.numVal < static_cast<double>(std::numeric_limits<int>::min()) ||
+      value.numVal > static_cast<double>(std::numeric_limits<int>::max())) {
+    throw std::runtime_error("Invalid integer in .qcomp field '" + std::string(field) + "'");
+  }
+  return static_cast<int>(value.numVal);
+}
 
 class JsonParser {
 public:
@@ -280,9 +303,160 @@ std::string escapeJsonString(std::string_view str) {
   return ss.str();
 }
 
+constexpr int kMaxBundleQubits = 24;
+constexpr long double kMaxExactJsonInteger = 9007199254740991.0L;
+
+void requireFinite(double value, const std::string &field) {
+  if (!std::isfinite(value)) {
+    throw std::runtime_error("Invalid .qcomp bundle: '" + field + "' must be finite");
+  }
+}
+
+void validateInstructions(const std::vector<Instruction> &instructions, int qubitCount,
+                          const std::string &field) {
+  for (std::size_t i = 0; i < instructions.size(); ++i) {
+    const auto &instruction = instructions[i];
+    requireFinite(instruction.parameterValue, field + "[" + std::to_string(i) + "].parameter");
+    for (int qubit : instruction.qubitIndices) {
+      if (qubit < 0 || qubit >= qubitCount) {
+        throw std::runtime_error("Invalid .qcomp bundle: qubit index in '" + field +
+                                 "' is outside the declared register");
+      }
+    }
+  }
+}
+
+void validateExperimentBundle(const ExperimentBundle &bundle) {
+  if (bundle.schema != "QCOMPILE-EXPERIMENT-1") {
+    throw std::runtime_error("Unsupported .qcomp bundle schema version: '" + bundle.schema +
+                             "' (expected QCOMPILE-EXPERIMENT-1)");
+  }
+  if (bundle.qubitCount < 0 || bundle.qubitCount > kMaxBundleQubits) {
+    throw std::runtime_error("Invalid qubit count in .qcomp bundle: " +
+                             std::to_string(bundle.qubitCount));
+  }
+  if (bundle.currentStep > bundle.totalSteps) {
+    throw std::runtime_error("Invalid .qcomp bundle: current step exceeds total steps");
+  }
+  auto requireJsonSize = [](std::size_t value, const std::string &field) {
+    if (static_cast<long double>(value) > kMaxExactJsonInteger) {
+      throw std::runtime_error("Invalid .qcomp bundle: '" + field +
+                               "' exceeds the exact JSON integer range");
+    }
+  };
+  requireJsonSize(bundle.currentStep, "current_step");
+  requireJsonSize(bundle.totalSteps, "total_steps");
+  if (!bundle.statevector.empty() &&
+      (bundle.totalSteps != bundle.instructions.size() ||
+       bundle.isComplete != (bundle.currentStep == bundle.totalSteps))) {
+    throw std::runtime_error("Invalid .qcomp bundle: saved session completion or instruction count is inconsistent");
+  }
+
+  requireFinite(bundle.stateNorm, "simulation.state_norm");
+  const std::size_t stateCount = std::size_t{1} << bundle.qubitCount;
+  if (!bundle.statevector.empty() && bundle.statevector.size() != stateCount) {
+    throw std::runtime_error("Invalid .qcomp bundle: statevector size does not match qubit count");
+  }
+  if (!bundle.basisProbabilities.empty() && bundle.basisProbabilities.size() != stateCount) {
+    throw std::runtime_error("Invalid .qcomp bundle: basis probability count does not match qubit count");
+  }
+  long double stateNormSquared = 0.0L;
+  double simulatorNormSquared = 0.0;
+  for (const auto &amplitude : bundle.statevector) {
+    requireFinite(amplitude.real(), "simulation.statevector.re");
+    requireFinite(amplitude.imag(), "simulation.statevector.im");
+    const double probability = std::norm(amplitude);
+    simulatorNormSquared += probability;
+    stateNormSquared += probability;
+  }
+  if (!bundle.statevector.empty()) {
+    const double computedNorm = std::sqrt(simulatorNormSquared);
+    if (std::abs(computedNorm - bundle.stateNorm) > 1e-12 ||
+        std::abs(stateNormSquared - 1.0L) > 1e-8L) {
+      throw std::runtime_error("Invalid .qcomp bundle: saved statevector norm is inconsistent or not normalized");
+    }
+  }
+  long double probabilitySum = 0.0L;
+  for (double probability : bundle.basisProbabilities) {
+    requireFinite(probability, "simulation.basis_probabilities");
+    if (probability < 0.0) {
+      throw std::runtime_error("Invalid .qcomp bundle: basis probabilities must be non-negative");
+    }
+    probabilitySum += probability;
+  }
+  if (!bundle.basisProbabilities.empty()) {
+    const long double expectedMass = bundle.statevector.empty()
+        ? static_cast<long double>(bundle.stateNorm) * bundle.stateNorm
+        : stateNormSquared;
+    if (std::abs(probabilitySum - expectedMass) > 1e-12L) {
+      throw std::runtime_error("Invalid .qcomp bundle: basis probability mass does not match the saved state");
+    }
+    if (!bundle.statevector.empty()) {
+      for (std::size_t i = 0; i < bundle.statevector.size(); ++i) {
+        if (std::abs(bundle.basisProbabilities[i] - std::norm(bundle.statevector[i])) > 1e-12) {
+          throw std::runtime_error("Invalid .qcomp bundle: basis probabilities do not match the saved statevector");
+        }
+      }
+    }
+  }
+  std::set<std::size_t> measurementSteps;
+  for (const auto &measurement : bundle.recordedMeasurements) {
+    requireJsonSize(measurement.first, "recorded_measurements.step");
+    if (!measurementSteps.insert(measurement.first).second) {
+      throw std::runtime_error("Invalid .qcomp bundle: duplicate recorded measurement step");
+    }
+    if (measurement.first == 0 || measurement.first > bundle.currentStep ||
+        measurement.first > bundle.instructions.size() ||
+        bundle.instructions[measurement.first - 1].type != InstructionType::Measure) {
+      throw std::runtime_error("Invalid .qcomp bundle: recorded measurement step is outside the saved run");
+    }
+    const auto &measureInstruction = bundle.instructions[measurement.first - 1];
+    if (measurement.second.size() != measureInstruction.qubitIndices.size() ||
+        !std::all_of(measurement.second.begin(), measurement.second.end(),
+                     [](char bit) { return bit == '0' || bit == '1'; })) {
+      throw std::runtime_error("Invalid .qcomp bundle: recorded measurement outcome does not match its measurement");
+    }
+  }
+
+  validateInstructions(bundle.rawInstructions, bundle.qubitCount, "circuit.raw_instructions");
+  validateInstructions(bundle.instructions, bundle.qubitCount, "circuit.instructions");
+
+  if (bundle.hasChemistry) {
+    requireFinite(bundle.distance, "chemistry.distance");
+    requireFinite(bundle.electronicEnergy, "chemistry.electronic_energy");
+    requireFinite(bundle.nuclearRepulsion, "chemistry.nuclear_repulsion");
+    requireFinite(bundle.totalEnergy, "chemistry.total_energy");
+    requireFinite(bundle.exactElectronicEnergy, "chemistry.exact_electronic_energy");
+    requireFinite(bundle.exactTotalEnergy, "chemistry.exact_total_energy");
+    requireFinite(bundle.variationalError, "chemistry.variational_error");
+    if (bundle.energyEvaluations < 0) {
+      throw std::runtime_error("Invalid .qcomp bundle: chemistry.evaluations must be non-negative");
+    }
+    if (bundle.optimizerParameterRadians) {
+      requireFinite(*bundle.optimizerParameterRadians, "chemistry.optimizer_parameter_radians");
+    }
+    if (bundle.referenceElectronicEnergy) {
+      requireFinite(*bundle.referenceElectronicEnergy, "chemistry.reference_electronic_energy");
+    }
+  }
+  if (bundle.hasConvergence) {
+    for (std::size_t i = 0; i < bundle.convergenceTrajectory.size(); ++i) {
+      const auto &point = bundle.convergenceTrajectory[i];
+      if (point.evaluation < 0) {
+        throw std::runtime_error("Invalid .qcomp bundle: convergence evaluation must be non-negative");
+      }
+      const std::string prefix = "convergence.trajectory[" + std::to_string(i) + "].";
+      requireFinite(point.parameter0, prefix + "p0");
+      requireFinite(point.parameter1, prefix + "p1");
+      requireFinite(point.electronicEnergy, prefix + "electronic");
+      requireFinite(point.totalEnergy, prefix + "total");
+    }
+  }
+}
 } // namespace
 
 std::string serializeExperimentBundle(const ExperimentBundle &b) {
+  validateExperimentBundle(b);
   std::ostringstream os;
   os << std::setprecision(17);
   os << "{\n";
@@ -376,6 +550,12 @@ std::string serializeExperimentBundle(const ExperimentBundle &b) {
        << ",\n    \"variational_error\": " << b.variationalError
        << ",\n    \"evaluations\": " << b.energyEvaluations
        << ",\n    \"converged\": " << (b.converged ? "true" : "false");
+    if (b.optimizerParameterRadians) {
+      os << ",\n    \"optimizer_parameter_radians\": " << *b.optimizerParameterRadians;
+    }
+    if (b.referenceElectronicEnergy) {
+      os << ",\n    \"reference_electronic_energy\": " << *b.referenceElectronicEnergy;
+    }
   }
   os << "\n  },\n";
 
@@ -448,8 +628,8 @@ ExperimentBundle deserializeExperimentBundle(const std::string &jsonText) {
   if (!circuit.isObject() || !circuit.contains("qubit_count") || !circuit["qubit_count"].isNumber()) {
     throw std::runtime_error("Malformed .qcomp bundle: missing or invalid 'circuit.qubit_count' field");
   }
-  b.qubitCount = static_cast<int>(circuit["qubit_count"].numVal);
-  if (b.qubitCount < 0 || b.qubitCount > 24) {
+  b.qubitCount = parseJsonInt(circuit["qubit_count"], "circuit.qubit_count");
+  if (b.qubitCount < 0 || b.qubitCount > kMaxBundleQubits) {
     throw std::runtime_error("Invalid qubit count in .qcomp bundle: " + std::to_string(b.qubitCount));
   }
 
@@ -466,7 +646,7 @@ ExperimentBundle deserializeExperimentBundle(const std::string &jsonText) {
       }
       if (item.contains("qubits") && item["qubits"].isArray()) {
         for (const auto &q : item["qubits"].arrVal) {
-          if (q.isNumber()) in.qubitIndices.push_back(static_cast<int>(q.numVal));
+          if (q.isNumber()) in.qubitIndices.push_back(parseJsonInt(q, "circuit.instruction.qubits"));
         }
       }
       out.push_back(std::move(in));
@@ -479,11 +659,11 @@ ExperimentBundle deserializeExperimentBundle(const std::string &jsonText) {
   // Simulation
   const auto &sim = root["simulation"];
   if (sim.isObject()) {
-    if (sim.contains("current_step") && sim["current_step"].isNumber()) {
-      b.currentStep = static_cast<std::size_t>(sim["current_step"].numVal);
+    if (sim.contains("current_step")) {
+      b.currentStep = parseJsonSize(sim["current_step"], "simulation.current_step");
     }
-    if (sim.contains("total_steps") && sim["total_steps"].isNumber()) {
-      b.totalSteps = static_cast<std::size_t>(sim["total_steps"].numVal);
+    if (sim.contains("total_steps")) {
+      b.totalSteps = parseJsonSize(sim["total_steps"], "simulation.total_steps");
     }
     if (sim.contains("is_complete") && sim["is_complete"].isBool()) {
       b.isComplete = sim["is_complete"].boolVal;
@@ -508,8 +688,11 @@ ExperimentBundle deserializeExperimentBundle(const std::string &jsonText) {
     if (sim.contains("recorded_measurements") && sim["recorded_measurements"].isArray()) {
       for (const auto &item : sim["recorded_measurements"].arrVal) {
         if (item.isObject() && item.contains("step") && item.contains("outcome")) {
-          std::size_t step = static_cast<std::size_t>(item["step"].numVal);
-          std::string outcome = item["outcome"].isString() ? item["outcome"].strVal : "";
+          const std::size_t step = parseJsonSize(item["step"], "simulation.recorded_measurements.step");
+          if (!item["outcome"].isString()) {
+            throw std::runtime_error("Invalid outcome in .qcomp recorded measurement");
+          }
+          const std::string outcome = item["outcome"].strVal;
           b.recordedMeasurements.emplace_back(step, outcome);
         }
       }
@@ -533,8 +716,20 @@ ExperimentBundle deserializeExperimentBundle(const std::string &jsonText) {
       if (chem.contains("exact_electronic_energy") && chem["exact_electronic_energy"].isNumber()) b.exactElectronicEnergy = chem["exact_electronic_energy"].numVal;
       if (chem.contains("exact_total_energy") && chem["exact_total_energy"].isNumber()) b.exactTotalEnergy = chem["exact_total_energy"].numVal;
       if (chem.contains("variational_error") && chem["variational_error"].isNumber()) b.variationalError = chem["variational_error"].numVal;
-      if (chem.contains("evaluations") && chem["evaluations"].isNumber()) b.energyEvaluations = static_cast<int>(chem["evaluations"].numVal);
+      if (chem.contains("evaluations")) b.energyEvaluations = parseJsonInt(chem["evaluations"], "chemistry.evaluations");
       if (chem.contains("converged") && chem["converged"].isBool()) b.converged = chem["converged"].boolVal;
+      if (chem.contains("optimizer_parameter_radians")) {
+        if (!chem["optimizer_parameter_radians"].isNumber()) {
+          throw std::runtime_error("Invalid .qcomp chemistry.optimizer_parameter_radians");
+        }
+        b.optimizerParameterRadians = chem["optimizer_parameter_radians"].numVal;
+      }
+      if (chem.contains("reference_electronic_energy")) {
+        if (!chem["reference_electronic_energy"].isNumber()) {
+          throw std::runtime_error("Invalid .qcomp chemistry.reference_electronic_energy");
+        }
+        b.referenceElectronicEnergy = chem["reference_electronic_energy"].numVal;
+      }
     }
   }
 
@@ -546,7 +741,7 @@ ExperimentBundle deserializeExperimentBundle(const std::string &jsonText) {
       for (const auto &item : conv["trajectory"].arrVal) {
         if (item.isObject()) {
           VqeConvergencePoint pt;
-          if (item.contains("eval") && item["eval"].isNumber()) pt.evaluation = static_cast<int>(item["eval"].numVal);
+          if (item.contains("eval")) pt.evaluation = parseJsonInt(item["eval"], "convergence.trajectory.eval");
           if (item.contains("p0") && item["p0"].isNumber()) pt.parameter0 = item["p0"].numVal;
           if (item.contains("p1") && item["p1"].isNumber()) pt.parameter1 = item["p1"].numVal;
           if (item.contains("electronic") && item["electronic"].isNumber()) pt.electronicEnergy = item["electronic"].numVal;
@@ -558,6 +753,7 @@ ExperimentBundle deserializeExperimentBundle(const std::string &jsonText) {
     }
   }
 
+  validateExperimentBundle(b);
   return b;
 }
 
@@ -572,25 +768,27 @@ void saveExperimentBundle(const std::string &filePath, const ExperimentBundle &b
       throw std::runtime_error("Could not open temporary file for writing: " + tempPath);
     }
     out << content;
+    out.flush();
     if (!out) {
       out.close();
       std::remove(tempPath.c_str());
       throw std::runtime_error("Failed to write experiment bundle content to temporary file: " + tempPath);
     }
+    out.close();
+    if (!out) {
+      std::remove(tempPath.c_str());
+      throw std::runtime_error("Failed to finish writing experiment bundle content to temporary file: " + tempPath);
+    }
   }
 
-  // Atomic file replace
+  // Atomic replacement must never remove the existing destination on failure.
   std::error_code ec;
   std::filesystem::rename(tempPath, filePath, ec);
   if (ec) {
-    // Fallback if destination exists and cannot be overwritten directly by rename
-    std::filesystem::remove(filePath, ec);
-    std::filesystem::rename(tempPath, filePath, ec);
-    if (ec) {
-      std::remove(tempPath.c_str());
-      throw std::runtime_error("Failed to atomically replace destination bundle: " + filePath + " (" + ec.message() + ")");
-    }
+    std::remove(tempPath.c_str());
+    throw std::runtime_error("Failed to atomically replace destination bundle: " + filePath + " (" + ec.message() + ")");
   }
+
 }
 
 ExperimentBundle loadExperimentBundle(const std::string &filePath) {

@@ -493,6 +493,10 @@ The five-point sweep uses fresh generator/solver runs at 0.735, 0.900, 1.100, 1.
 
 `./qcompile_lab --smoke-test` exercises camera rotation/zoom, bond preview updates, circuit stepping and deterministic measurement replay, bounded state inspection, simulator-initialization cleanup, injected playback resource-failure handling, two individual geometry runs, and the five-point sweep, then saves a screenshot to `/tmp/qcompile-lab-smoke.png`, replacing any existing file at that path. Optional executable overrides are `QCOMPILE_LAB_PYTHON`, `QCOMPILE_LAB_GENERATOR`, and `QCOMPILE_LAB_BENCHMARKS`. The app adds no chemistry-package runtime dependency, web frontend, or support for molecules other than H₂.
 
+Experiment bundles use the existing `QCOMPILE-EXPERIMENT-1` JSON schema and the simulator's 24-qubit supported limit. Saving validates the schema identifier, qubit count and indices, state-vector dimensions, normalized state/norm/probability consistency, finite persisted values, unique valid measurement steps and outcomes, and step indices before writing a temporary file; an invalid save does not replace an existing destination. Opening restores the source and optimizer setting, recompiles the source, then replays the selected step with the deterministic simulator. The replayed state and recorded measurements must match any saved snapshots before the open is reported successful. A compilation, initialization, or replay failure leaves the loaded source/diagnostics visible, clears unrelated run output, and does not display `OPENED`.
+
+Chemistry summaries and optimizer trajectories in a bundle are restored as saved data, not recalculated results. The current H₂ workbench saves its optimizer parameter and electronic reference energy as optional schema-1 fields; older schema-1 bundles without those fields remain loadable and show those values as unavailable rather than inventing them. A bundle without chemistry or convergence data clears prior chemistry and trajectory displays.
+
 ## 13. Historical Hardening Phase Register and Current Technical Backlog
 
 ### 13.1 Phase Register Status (Historical Record)

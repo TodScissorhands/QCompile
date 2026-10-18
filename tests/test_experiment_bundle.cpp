@@ -5,6 +5,8 @@
 #include <complex>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
+#include <limits>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -62,6 +64,8 @@ void testExperimentBundle() {
     original.variationalError = 0.000000000000061;
     original.energyEvaluations = 6803;
     original.converged = true;
+    original.optimizerParameterRadians = 0.068498646886667;
+    original.referenceElectronicEnergy = -4.218264154490395;
 
     // Real convergence trajectory sample
     original.hasConvergence = true;
@@ -116,6 +120,13 @@ void testExperimentBundle() {
     require(std::abs(loaded.totalEnergy - original.totalEnergy) < 1e-15, "total energy preserved");
     require(std::abs(loaded.exactTotalEnergy - original.exactTotalEnergy) < 1e-15, "exact total energy preserved");
     require(loaded.energyEvaluations == original.energyEvaluations, "evaluations preserved");
+    require(loaded.optimizerParameterRadians.has_value(), "optimizer parameter is present");
+    require(std::abs(*loaded.optimizerParameterRadians - *original.optimizerParameterRadians) < 1e-15,
+            "optimizer parameter preserved");
+    require(loaded.referenceElectronicEnergy.has_value(), "reference electronic energy is present");
+    require(std::abs(*loaded.referenceElectronicEnergy - *original.referenceElectronicEnergy) < 1e-15,
+            "reference electronic energy preserved");
+
     require(loaded.converged == original.converged, "converged preserved");
 
     // Verify convergence trajectory
@@ -125,6 +136,15 @@ void testExperimentBundle() {
     require(std::abs(loaded.convergenceTrajectory[2].totalEnergy - original.convergenceTrajectory[2].totalEnergy) < 1e-15,
             "convergence point energy preserved");
     require(loaded.convergenceTrajectory[2].isBest, "isBest flag preserved");
+  }
+  // Version-1 bundles written before the optional result fields remain loadable.
+  {
+    const std::string legacyJson =
+        R"({"schema":"QCOMPILE-EXPERIMENT-1","source":{"dsl":"","optimize":false},"circuit":{"qubit_count":0},"chemistry":{"has_chemistry":true,"formula":"H2"}})";
+    const ExperimentBundle legacy = deserializeExperimentBundle(legacyJson);
+    require(legacy.hasChemistry && legacy.formula == "H2", "legacy chemistry metadata remains loadable");
+    require(!legacy.optimizerParameterRadians.has_value(), "legacy bundle does not invent an optimizer parameter");
+    require(!legacy.referenceElectronicEnergy.has_value(), "legacy bundle does not invent a reference energy");
   }
 
   // 2. Schema Validation, Malformed Handling & Boundary Rejection
@@ -202,6 +222,81 @@ void testExperimentBundle() {
     const ExperimentBundle updated = loadExperimentBundle(tempFile);
     require(updated.title == "Updated Atomic Title", "atomic replace succeeded");
 
+    // Invalid in-memory data must be rejected before the existing destination is replaced.
+    std::ifstream savedFile(tempFile, std::ios::binary);
+    const std::string savedBytes((std::istreambuf_iterator<char>(savedFile)), std::istreambuf_iterator<char>());
+    const std::string savedTitle = updated.title;
+    auto rejectedSavePreservesDestination = [&](ExperimentBundle invalid, const std::string &description) {
+      bool rejected = false;
+      try {
+        saveExperimentBundle(tempFile, invalid);
+      } catch (const std::exception &) {
+        rejected = true;
+      }
+      std::ifstream afterFile(tempFile, std::ios::binary);
+      const std::string afterBytes((std::istreambuf_iterator<char>(afterFile)), std::istreambuf_iterator<char>());
+      require(rejected, description + " save rejected");
+      require(afterBytes == savedBytes, description + " save preserved destination bytes");
+      require(loadExperimentBundle(tempFile).title == savedTitle, description + " destination remains loadable");
+    };
+
+    ExperimentBundle invalid = bundle;
+    invalid.qubitCount = 25;
+    rejectedSavePreservesDestination(invalid, "unsupported qubit count");
+    invalid = bundle;
+    invalid.schema = "QCOMPILE-EXPERIMENT-99";
+    rejectedSavePreservesDestination(invalid, "unsupported schema");
+    invalid = bundle;
+    invalid.stateNorm = std::numeric_limits<double>::quiet_NaN();
+    rejectedSavePreservesDestination(invalid, "non-finite simulation state");
+    invalid = bundle;
+    invalid.instructions[0].parameterValue = std::numeric_limits<double>::infinity();
+    rejectedSavePreservesDestination(invalid, "non-finite circuit parameter");
+    invalid = bundle;
+    invalid.hasChemistry = true;
+    invalid.electronicEnergy = std::numeric_limits<double>::infinity();
+    rejectedSavePreservesDestination(invalid, "non-finite chemistry result");
+    invalid = bundle;
+    invalid.hasConvergence = true;
+    invalid.convergenceTrajectory = {{1, 0.0, 0.0, std::numeric_limits<double>::quiet_NaN(), -1.0, true}};
+    rejectedSavePreservesDestination(invalid, "non-finite convergence point");
+    invalid = bundle;
+    invalid.instructions[0].qubitIndices = {1};
+    rejectedSavePreservesDestination(invalid, "out-of-range circuit qubit");
+    invalid = bundle;
+    invalid.statevector = {std::complex<double>(1.0, 0.0)};
+    rejectedSavePreservesDestination(invalid, "statevector dimension mismatch");
+    invalid = bundle;
+    invalid.currentStep = 1;
+    invalid.totalSteps = 1;
+    invalid.isComplete = false;
+    invalid.statevector = {std::complex<double>(1.0, 0.0), std::complex<double>(0.0, 0.0)};
+    invalid.basisProbabilities = {1.0, 0.0};
+    rejectedSavePreservesDestination(invalid, "inconsistent session completion state");
+    ExperimentBundle snapshot = bundle;
+    snapshot.totalSteps = 1;
+    snapshot.statevector = {std::complex<double>(1.0, 0.0), std::complex<double>(0.0, 0.0)};
+    snapshot.basisProbabilities = {1.0, 0.0};
+    invalid = snapshot;
+    invalid.stateNorm = 0.5;
+    rejectedSavePreservesDestination(invalid, "state norm inconsistent with statevector");
+    invalid = snapshot;
+    invalid.basisProbabilities = {0.5, 0.5};
+    rejectedSavePreservesDestination(invalid, "basis probabilities inconsistent with statevector");
+    invalid = snapshot;
+    invalid.statevector = {std::complex<double>(2.0, 0.0), std::complex<double>(0.0, 0.0)};
+    invalid.stateNorm = 2.0;
+    invalid.basisProbabilities = {4.0, 0.0};
+    rejectedSavePreservesDestination(invalid, "unnormalized statevector");
+    invalid = snapshot;
+    invalid.basisProbabilities = {-1.0, 2.0};
+    rejectedSavePreservesDestination(invalid, "negative basis probability");
+    invalid = snapshot;
+    invalid.instructions = {{InstructionType::Measure, "measure", {0}, 0.0}};
+    invalid.currentStep = 1;
+    invalid.isComplete = true;
+    invalid.recordedMeasurements = {{1, "0"}, {1, "1"}};
+    rejectedSavePreservesDestination(invalid, "duplicate recorded measurement step");
     // Clean up temp file
     std::filesystem::remove(tempFile);
   }
