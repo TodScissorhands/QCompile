@@ -229,8 +229,8 @@ int runEngineLiH(double distance, bool jsonOutput) {
                 << "Nuclear repulsion: " << std::setprecision(15) << gen.nuclearRepulsion << " Hartree\n"
                 << "Frozen core scalar (E_core): " << gen.coreEnergy << " Hartree\n"
                 << "RHF total energy: " << gen.rhfTotalEnergy << " Hartree\n"
-                << "Active space FCI correlation energy (E_CI): " << gen.fciExactElectronicEnergy << " Hartree\n"
-                << "Active space exact total energy (E_core + E_CI): " << gen.fciExactTotalEnergy << " Hartree\n";
+                << "Active-space FCI electronic energy (E_active): " << gen.fciExactElectronicEnergy << " Hartree\n"
+                << "Active-space exact total energy (E_core + E_active): " << gen.fciExactTotalEnergy << " Hartree\n";
     }
     return 0;
   } catch (const std::exception &error) {

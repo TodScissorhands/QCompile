@@ -444,17 +444,17 @@ void testMolecularIntegralEngine() {
     require(std::abs(lihHamJW.coreEnergy - (-6.80297354998635)) < 1e-7,
             "LiH frozen-core scalar energy E_core matches PySCF reference (-6.80297355 Ha)");
 
-    // Match active-space correlation electronic energy E_CI = -1.05931198 Ha
+    // Match active-space electronic energy E_active = -1.05931198 Ha
     require(std::abs(lihHamJW.fciExactElectronicEnergy - (-1.059311983913)) < 1e-7,
-            "LiH active-space FCI electronic correlation energy matches reference (-1.05931198 Ha)");
+            "LiH active-space FCI electronic energy matches reference (-1.05931198 Ha)");
 
-    // Match PySCF CASCI(2, 2) total energy: E_tot = E_core + E_CI = -7.86228553 Ha
+    // Match PySCF CASCI(2, 2) total energy: E_tot = E_core + E_active = -7.86228553 Ha
     require(std::abs(lihHamJW.fciExactTotalEnergy - (-7.86228553389953)) < 1e-7,
             "LiH active-space exact total energy matches PySCF CASCI(2,2) reference (-7.86228553 Ha)");
 
-    // Exactly-once counting assertion: E_tot == E_core + E_CI
+    // Exactly-once counting assertion: E_tot == E_core + E_active
     require(std::abs(lihHamJW.fciExactTotalEnergy - (lihHamJW.coreEnergy + lihHamJW.fciExactElectronicEnergy)) < 1e-14,
-            "Strict energy identity: E_tot == E_core + E_CI holds exactly");
+            "Strict energy identity: E_tot == E_core + E_active holds exactly");
 
     // 10e. Parity Mapping Reduction to 2 Qubits
     const auto lihHamParity = buildMolecularHamiltonian(lihGeom, MappingType::Parity, actConfig);

@@ -440,9 +440,25 @@ where `|D0>` is index 5 and `|D1>` is index 10 in q0-least-significant occupatio
 
 `exactHeHSingletEnergy` constructs the 16-by-16 complex matrix from the Pauli terms, projects it onto the three singlet CSFs, and uses the shared dimension-checked Jacobi eigensolver. This excludes the Ms=0 triplet determinant combination. The variational optimizer uses a deterministic 3-by-4 grid of starting points, bounded coordinate-wise golden-section minimization, at most eight sweeps per start, 48 iterations per coordinate, `1e-8` radian interval stopping, and a 10,000 energy-evaluation ceiling. The reported state must lie within `1e-8` Ha of the exact singlet minimum and cannot undercut it by more than `1e-10` Ha. The exact energy is also required to agree with the independently validated Psi4 FCI reference within `1e-10` Ha.
 
-The external reference reports electronic FCI energy `−4.218264154490385` Ha, nuclear repulsion `+1.3667896093920315` Ha, and total Born–Oppenheimer energy `−2.8514745450983536` Ha. Nuclear repulsion is added only when producing total energy. Frozen generation settings, integrals, coefficient provenance, and matrix-equivalence checks are in `benchmarks/heh_plus/reference_data.json`; the independent Psi4 result and calculation log are retained alongside it. Python/Qiskit Nature/PySCF/Psi4 are offline reference-generation tools, not runtime or C++ build dependencies.
+The external reference reports electronic FCI energy `−4.218264154490385` Ha, nuclear repulsion `+1.3667896093920315` Ha, and total Born–Oppenheimer energy `−2.8514745450983536` Ha. The independent Psi4 DETCI calculation reports `<S²> = 0.0`; the model and successful reproduction are recorded in `benchmarks/heh_plus/GATE_A_STATUS.md`, `benchmarks/heh_plus/psi4_fci_reference_libint290_attempt1_retry.json`, and `benchmarks/heh_plus/psi4_fci_output_libint290_attempt1_retry.txt`. Nuclear repulsion is added only when producing total energy. Frozen generation settings, integrals, coefficient provenance, and matrix-equivalence checks are in `benchmarks/heh_plus/reference_data.json`. Python/Qiskit Nature/PySCF/Psi4 are offline reference-generation tools, not runtime or C++ build dependencies.
 
 This is an educational implementation of established Pauli-Hamiltonian, state-vector VQE-style optimization, and exact-diagonalization methods. The generated-H₂ path is restricted to the documented H₂/STO-3G/parity model. It does not provide arbitrary-molecule coverage, quantum advantage, or a novel algorithm.
+
+## 9.1 Fixed LiH Frozen-Core Active-Space Benchmark
+
+`qcompile_benchmarks --engine-lih` evaluates LiH at `R = 1.595 Å` in STO-3G for a neutral four-electron singlet. The C++ integral engine performs RHF, freezes the lowest spatial orbital (Li 1s), and retains two active spatial orbitals with two active electrons. This is a fixed active-space calculation, not arbitrary LiH chemistry or a geometry scan. The engine path reports the active-space exact diagonalization; the two-qubit hardware-efficient VQE path is exercised separately by `tests/test_vqe_optimizer.cpp`.
+
+The frozen-core scalar is
+
+```text
+E_core = E_nuc + 2 Σ_c h_cc + Σ_cd [2(cc|dd) − (cd|dc)]
+```
+
+and the effective active-space Hamiltonian uses the frozen-core-adjusted one-electron integrals plus active two-electron integrals. `E_core` is stored separately from the qubit Hamiltonian; the Pauli operator contains only the active-space electronic terms. Total Born–Oppenheimer energy is `E_core + E_active` exactly once. Do not add `E_core` into the qubit operator and then add it again to the measured energy.
+
+The reproducible independent PySCF CASCI procedure is `benchmarks/lih_active_space/validate_pyscf_lih.py`. It uses the same geometry, basis, RHF reference, one frozen core orbital, two active orbitals, and `(1α,1β)` active electron sector. The checked-in procedure verifies `E_total = E_core + E_active` and compares the component and total energies with the regression references within `1e-7 Ha`. PySCF 2.8.0 produced `E_core = -6.802973549986354 Ha`, `E_active = -1.0593119839131822 Ha`, and `E_total = -7.862285533899536 Ha`; the independent energy identity residual was zero at binary64 output precision. The C++ engine produced `-6.80297354995545 Ha`, `-1.05931198390915 Ha`, and `-7.8622855338646 Ha`, respectively. The largest total-energy difference is approximately `3.5e-11 Ha`, well inside the stated reference tolerance.
+
+The PySCF procedure and current cross-check details are in `benchmarks/lih_active_space/README.md`; the associated active-space regression and exactly-once scalar assertion are in `tests/test_molecular_integral_engine.cpp`.
 
 ## 10. Fixed Benchmark Catalog and Matrix Input Contract
 

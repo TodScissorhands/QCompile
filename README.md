@@ -1,6 +1,6 @@
 # QCompile
 
-QCompile is a domain-specific language (DSL) compiler and classical statevector simulator for quantum circuits, developed in C++17. It translates high-level quantum circuit definitions into simulator instructions, validates semantics and arithmetic expressions, performs adjacent-gate cancellation optimizations, and simulates state evolution and Pauli expectations on a statevector. It also provides benchmark executables for molecular variational quantum eigensolvers (H₂ and HeH⁺), an interactive Qt6 desktop workbench, and a local loopback dashboard.
+QCompile is a domain-specific language (DSL) compiler and classical statevector simulator for quantum circuits, developed in C++17. It translates high-level quantum circuit definitions into simulator instructions, validates semantics and arithmetic expressions, performs adjacent-gate cancellation optimizations, and simulates state evolution and Pauli expectations on a statevector. It also provides fixed H₂ and HeH⁺ VQE benchmarks, geometry-generated H₂ and a fixed LiH active-space benchmark, an interactive Qt6 desktop workbench, and a local loopback dashboard.
 
 ---
 
@@ -132,20 +132,15 @@ Run other provided sample programs:
 ```
 
 ### 2. Regression Test Suite
-Run the modular regression test suite (covers lexer, parser, semantic analyzer, optimizer, simulator, and chemistry validation across 391 assertions):
+Run the complete regression suite:
 ```bash
 make test
 # or directly:
 ./qcompile_tests
 ```
-Test implementations are structured into modular units under `tests/`:
-- `tests/test_lexer.cpp`: Comment and tokenization tests
-- `tests/test_parser.cpp`: Grammar, precedence, associativity, and AST invariants
-- `tests/test_semantics.cpp`: Semantic validation, arity, and numeric safety
-- `tests/test_optimizer.cpp`: Cancellation rules and RZ rotation merging
-- `tests/test_simulator.cpp`: Statevector evolution, bitstring ordering, and measurement collapse
-- `tests/test_chemistry.cpp`: Molecular Hamiltonians, Jacobi eigensolver, and VQE convergence
-- `tests/test_support.h` / `test_support.cpp`: Shared test fixtures and assertion helpers
+The suite covers the compiler, optimizer, simulator, workbench integration, molecular integrals, and VQE.
+
+Test modules under `tests/` include `test_lexer.cpp`, `test_parser.cpp`, `test_semantics.cpp`, `test_optimizer.cpp`, `test_simulator.cpp`, `test_chemistry.cpp`, `test_compiler_facade.cpp`, `test_simulation_session.cpp`, `test_workbench_integration.cpp`, `test_experiment_bundle.cpp`, `test_molecular_integral_engine.cpp`, `test_circuit_dag.cpp`, `test_coupling_map.cpp`, and `test_vqe_optimizer.cpp`. Shared fixtures and assertions are in `test_support.h` / `test_support.cpp`.
 
 ### 3. Molecular Chemistry Benchmarks
 Run the fixed molecular benchmarks and catalog CLI:
@@ -155,6 +150,17 @@ Run the fixed molecular benchmarks and catalog CLI:
 
 # Fixed HeH+ VQE benchmark (4 qubits, Jordan-Wigner, STO-3G at 1.463283 bohr)
 ./qcompile_heh
+
+# Native STO-3G H2 integral-engine checks (distances in Angstrom)
+./qcompile_benchmarks --engine-h2 0.735
+./qcompile_benchmarks --engine-h2 1.400
+
+# Fixed LiH (1 frozen core orbital, 2 active orbitals; exact active-space benchmark)
+./qcompile_benchmarks --engine-lih
+
+# Independent PySCF LiH active-space reference
+benchmarks/heh_plus/.venv-generator/bin/python -B \
+  benchmarks/lih_active_space/validate_pyscf_lih.py
 
 # Benchmark catalog CLI
 ./qcompile_benchmarks --list
@@ -189,10 +195,12 @@ Open `http://127.0.0.1:4173` in a web browser. The server executes allowlisted b
 - **Measurement Model**: Measurements calculate probabilities, sample basis outcomes using a seeded PRNG (`std::mt19937`), project the statevector onto the observed subspace, and renormalize, preserving conditional states and entanglement on unmeasured qubits.
 - **Gate Set**: Supported unitary operations are restricted to `H`, `X`, `Z`, `CNOT`, and `RZ`. General arbitrary single-qubit rotations or multi-qubit controlled gates require decomposition before input.
 - **Optimizer Scope**: The adjacent-gate optimizer performs local pairwise self-inverse cancellations ($H^2=I$, $X^2=I$, $Z^2=I$, $\text{CNOT}^2=I$) on identical adjacent operations. It does not reorder non-commuting gates or synthesize multi-qubit topologies.
-- **Chemistry Benchmarks**: Molecular benchmarks evaluate specific frozen models (H₂ in STO-3G with parity reduction; HeH⁺ in STO-3G with Jordan–Wigner) within designated symmetry sectors. They do not constitute an arbitrary quantum chemistry platform.
+- **Chemistry Benchmarks**: The H₂, HeH⁺, and LiH commands validate fixed STO-3G models and specified symmetry/active-space sectors. They are not an arbitrary quantum chemistry platform; geometry-generated support is restricted to the documented H₂ path.
 
 ---
 
 ## References and Documentation
 
 For complete technical specifications, language grammar, error catalogs, eigensolver derivations, and chemistry provenance, refer to the [Technical Reference Manual (`DOCUMENTATION.md`)](DOCUMENTATION.md).
+
+The current scientific benchmark evidence and reproduction notes are consolidated in [the MS10 validation report](docs/MS10_FINAL_REPORT.md).

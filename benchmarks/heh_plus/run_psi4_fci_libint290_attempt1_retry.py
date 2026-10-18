@@ -48,6 +48,15 @@ except Exception:
         s_squared = float(psi4.variable("S^2"))
     except Exception:
         s_squared = None
+
+if s_squared is None:
+    spin_lines = [
+        line for line in OUT.read_text(encoding="utf-8").splitlines()
+        if "Computed <S^2> vector 0 =" in line
+    ]
+    if spin_lines:
+        s_squared = float(spin_lines[-1].split("=")[-1].strip())
+
 payload = {
     "program": "Psi4",
     "version": psi4.__version__,
