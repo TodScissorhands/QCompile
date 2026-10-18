@@ -24,6 +24,7 @@ void testExperimentBundle();
 void testMolecularIntegralEngine();
 void testCircuitDag();
 void testCouplingMapAndRouting();
+void testVqeOptimizer();
 } // namespace test
 int main() {
   try {
@@ -48,6 +49,7 @@ int main() {
     test::testMolecularIntegralEngine();
     test::testCircuitDag();
     test::testCouplingMapAndRouting();
+    test::testVqeOptimizer();
   } catch (const std::exception &error) {
     std::cerr << "FAIL after " << test::assertions << " assertions: " << error.what() << '\n';
     return 1;
