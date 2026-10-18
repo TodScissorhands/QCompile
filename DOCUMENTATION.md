@@ -326,9 +326,9 @@ The anonymous-namespace helper `findQubitIndex` searches the validated declarati
 `generateInstructions` walks the AST in order. It skips qubit and variable declarations because they are compile-time information, not simulator actions. For each gate operation, it creates an `Instruction`, copies the gate name and evaluated parameter value, chooses `Measure` when the source name is `measure`, converts every source qubit name to an integer index, and appends the instruction. Converting names here separates the user-facing source language from the simulator's fast numeric representation.
 
 `printInstructions` prints each instruction in a demonstration-friendly form. Gate instructions use `APPLY`; `RZ` includes its evaluated numeric value; measurement instructions use `MEASURE`; and all operands print as bracketed indices.
-`optimizeInstructions` receives the validated circuit qubit count and performs a single left-to-right vector pass. It cancels only adjacent `ApplyGate` instructions with identical gate names and ordered qubit indices for H, X, Z, or CNOT. The supported single-qubit gates require exactly one index in `[0, qubitCount)`; CNOT requires two distinct indices in that range. These gates must have the unused `parameterValue` equal to zero. The output stack allows repeated cancellations to expose a new adjacent pair, while every measurement, RZ, unknown gate, and malformed instruction remains a barrier. It never commutes gates or removes operations across measurement.
+`optimizeInstructions` receives the validated circuit qubit count and delegates to `compiler::optimizeWithDag`. The DAG optimizer considers well-formed H, X, Z, CNOT, and finite-angle RZ candidates. It can cancel matching H/X/Z or ordered CNOT pairs and merge finite RZ rotations on the same qubit when their sum remains finite. A candidate pair may be brought together only when every intervening gate commutes under the explicit rules: disjoint gate supports; Z/Z, RZ/RZ, and Z/RZ on the same qubit; Z or finite RZ on a CNOT control; X on a CNOT target; and identical CNOTs. Measurements and other non-gate instructions are barriers. This is a conservative set of local rewrites, not general gate synthesis.
 
-The command-line driver runs this pass after generation and before simulation. It prints original and optimized unitary-gate counts separately from the original and optimized measurement counts. It does not report circuit depth.
+The compiler CLI reports original and optimized unitary-gate counts, CNOT counts, critical-path depth in layers, and measurement counts. The raw and optimized critical-path depths are also stored in `CompilationResult`; depth is a circuit metric, not a hardware-time estimate.
 
 ### `src/simulator/simulator.cpp`
 
@@ -343,6 +343,11 @@ The command-line driver runs this pass after generation and before simulation. I
 `measure` calculates `std::norm` for every amplitude and uses those values as a probability vector. It prints each non-negligible basis-state probability, constructs `std::discrete_distribution<int>`, samples a full-state outcome with the seeded generator, then prints only the bits named by the measurement instruction. When a measurement executes, the simulator calculates pre-measurement probabilities, samples a joint outcome, projects the state vector onto the measured subspace, and renormalizes.
 
 `run` loops through generated instructions. Measurement instructions call `measure`. `H`, `X`, and `Z` provide their fixed 2x2 matrix entries to `applySingleQubitGate`. `RZ` computes phases `exp(-i theta/2)` and `exp(i theta/2)` from the evaluated parameter and applies the diagonal matrix. `CNOT` calls `applyCNOT` with its two indices.
+
+### `src/simulator/simulation_session.cpp`
+
+`SimulationSession` retains the initial state and a snapshot after each successfully completed instruction. Backward stepping and replay through retained snapshots restore prior state and measurement outcomes rather than resampling. New steps are checked against a 512 MiB statevector-payload budget across the active simulator buffer and retained snapshots; allocator overhead, object metadata, and other process memory are excluded. The configured limit is checked before applying a new instruction, so a rejected step leaves `currentStep()` and the last stored state unchanged. At 24 qubits, the active state plus initial snapshot already use the full payload budget; the first new step is therefore rejected. The workbench catches session initialization and execution exceptions, stops playback on failure, and keeps its displayed execution position aligned with the last stored snapshot.
+
 
 ### `src/apps/main.cpp`
 
@@ -379,8 +384,8 @@ QCompile deliberately keeps the DSL small so every implemented rule can be demon
 - **No control flow:** There are no conditionals, loops, or runtime branches. This avoids adding execution-state rules beyond the current straight-line circuit model.
 - **No registers or arrays:** Qubits are declared as individual names in a comma-separated list. Array indexing and register-wide operations would require additional grammar, semantic rules, and code-generation behavior.
 - **No subroutines:** The language has no user-defined gate definitions, parameterized function calls, or reusable circuit blocks. This keeps source ordering and gate expansion simple.
-- **Limited circuit optimization:** The pass cancels only adjacent identical H, X, Z, or same-ordered CNOT pairs. It does not reorder instructions, optimize RZ, cross measurements, or compute circuit depth.
-- **Small state-vector simulation:** The simulator stores every basis-state amplitude, so its memory requirement grows as `2^n`. This is a textbook-correct and transparent approach for the small examples in this project, not a large-scale simulation strategy.
+- **Limited circuit optimization:** The DAG pass cancels recognized self-inverse gates and merges finite RZ rotations, including when explicitly commuting gates can be moved between them. Measurement instructions remain barriers. The supported commutation and rewrite rules are conservative; arbitrary identities, gate synthesis, and hardware scheduling are not implemented.
+- **Small state-vector simulation:** The simulator stores every basis-state amplitude and supports at most 24 qubits, so one 24-qubit state vector uses about 256 MiB. `SimulationSession` separately caps the combined payload of the active state and retained step snapshots at 512 MiB; allocator overhead and other process memory are excluded. A 24-qubit session can construct its initial state and snapshot at that cap, but cannot execute a step that would require a third 256 MiB buffer. The workbench reports initialization and step resource failures and only displays the first 128 basis-state probabilities.
 - **Numeric parameter evaluation only:** Variables and arithmetic expressions are evaluated to `double` values during semantic checking. Symbolic algebra is intentionally not implemented because the current simulator requires concrete values for `RZ` angles.
 - **Projective measurement collapse:** When a measurement executes, the simulator calculates pre-measurement probabilities, samples a joint outcome, projects the state vector onto the measured subspace, and renormalizes, preserving conditional states and entanglement on unmeasured qubits.
 
@@ -486,10 +491,11 @@ Each calculation creates a private `QTemporaryDir`, invokes the existing offline
 
 The five-point sweep uses fresh generator/solver runs at 0.735, 0.900, 1.100, 1.250, and 1.400 Å. The plot displays only actual calculated total-energy points and corresponding physical-sector exact-reference points; it does not draw an interpolated curve. The guided prediction compares the two endpoint totals and identifies the minimum only among the sweep’s sampled geometries. The one-parameter ansatz is not claimed to remain accurate throughout dissociation.
 
-`./qcompile_lab --smoke-test` exercises camera rotation/zoom, bond preview updates, circuit stepping/play/pause, two individual geometry runs, and the five-point sweep, then saves a screenshot to `/tmp/qcompile-lab-smoke.png` without overwriting an existing file. Optional executable overrides are `QCOMPILE_LAB_PYTHON`, `QCOMPILE_LAB_GENERATOR`, and `QCOMPILE_LAB_BENCHMARKS`. The app adds no chemistry-package runtime dependency, web frontend, or support for molecules other than H₂.
-## 13. Hardening Milestone Phase Register & Roadmaps
+`./qcompile_lab --smoke-test` exercises camera rotation/zoom, bond preview updates, circuit stepping and deterministic measurement replay, bounded state inspection, simulator-initialization cleanup, injected playback resource-failure handling, two individual geometry runs, and the five-point sweep, then saves a screenshot to `/tmp/qcompile-lab-smoke.png`, replacing any existing file at that path. Optional executable overrides are `QCOMPILE_LAB_PYTHON`, `QCOMPILE_LAB_GENERATOR`, and `QCOMPILE_LAB_BENCHMARKS`. The app adds no chemistry-package runtime dependency, web frontend, or support for molecules other than H₂.
 
-### 13.1 Phase Register Status
+## 13. Historical Hardening Phase Register and Current Technical Backlog
+
+### 13.1 Phase Register Status (Historical Record)
 
 | Phase | Milestone Objective | Status | Completed Work / Scope | Reported Verification Summary |
 | :--- | :--- | :--- | :--- | :--- |
@@ -503,6 +509,8 @@ The five-point sweep uses fresh generator/solver runs at 0.735, 0.900, 1.100, 1.
 | **Phase 7** | AST Field Initialization Safety | **Accepted** | Explicit in-class default member initializers for primitive fields in `struct Expression` (`type = NumberLiteral`, `operation = '\0'`) and `struct Statement` (`type = QubitDeclaration`, `line = 0`, `hasParameter = false`), eliminating indeterminate bytes and uninitialized reads on default construction. | *Reported verification:* 372 assertions passed; `git diff --check` clean; ASan/UBSan clean; H₂ (-1.857275 Ha) and HeH⁺ (-4.218264 Ha) benchmarks identical to baseline. |
 | **Phase 8** | Consecutive RZ Rotation Merging | **Accepted** | Extended `optimizeInstructions()` to merge consecutive finite `RZ` rotations on the same in-range qubit into a single rotation with summed angle; cancels to identity if merged angle is within `1e-12` of zero; preserves measurement boundaries, out-of-range/malformed gates, non-finite angles, and non-zero `2pi` multiples. | *Reported verification:* 387 assertions passed; `git diff --check` clean; ASan/UBSan clean; H₂ (-1.857275 Ha) and HeH⁺ (-4.218264 Ha) benchmarks identical to baseline. |
 | **Phase 9** | CLI Behavior & Input Handling | **Implemented — Pending Review** | Standard `--help` and `-h` command-line flags handled before file read, printing usage instructions to standard output with exit code `0`; verified empty and whitespace-only programs parse cleanly into valid 0-statement programs and exit code `0`. | *Reported verification:* 391 assertions passed; `git diff --check` clean; ASan/UBSan clean; CLI `--help`, `-h`, and empty input verified; chemistry benchmarks identical to baseline. |
+
+The phase register above preserves statuses and verification summaries as recorded at each milestone; it is not the current roadmap. Backlog entries below describe current open work unless explicitly marked `Resolved`; resolved items remain for traceability, not as pending features.
 The following items are recorded as non-blocking architectural and technical debt backlog entries, categorized by priority and status:
 
 #### A. Architectural & Code Quality Cleanup
@@ -513,9 +521,9 @@ The following items are recorded as non-blocking architectural and technical deb
 3. **Uninitialized and Default AST Struct Fields**:
    - *(Resolved in Phase 7)*: `struct Statement` and `struct Expression` in `include/compiler/ast.h` provide explicit in-class member initializers for all primitive members (`type`, `operation`, `line`, `hasParameter`).
 4. **Optimizer Scope Beyond Adjacent Cancellation**:
-   - *(Partial in Phase 8)*: Adjacent `RZ` rotation merging implemented. Commuting gate passes across disjoint qubits and circuit depth metrics remain deferred.
+   - *(Partially implemented by `CircuitDag`)*: Recognized H/X/Z/CNOT cancellations and finite RZ merging may operate across explicitly commuting intervening gates, including disjoint supports and specific Z/RZ–CNOT cases. General gate identities, synthesis, and scheduling remain out of scope.
 5. **Circuit Depth Reporting**:
-   - Compute and report critical path circuit depth in the instruction optimizer.
+   - *(Resolved)*: `CompilationResult` records raw and optimized critical-path depths, and the compiler CLI reports both in layers.
 6. **Test Suite Modularization**:
    - *(Resolved in test refactor)*: Monolithic `tests/qcompile_tests.cpp` decomposed into modular, subsystem-specific test units (`test_lexer.cpp`, `test_parser.cpp`, `test_semantics.cpp`, `test_optimizer.cpp`, `test_simulator.cpp`, `test_chemistry.cpp`) sharing common assertions in `test_support.h`/`test_support.cpp`. All 391 assertions and test invariants are preserved.
 

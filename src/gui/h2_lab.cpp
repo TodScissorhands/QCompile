@@ -21,6 +21,7 @@
 #include <QDebug>
 #include <QDir>
 #include <QDoubleSpinBox>
+#include <QEventLoop>
 #include <QFileInfo>
 #include <QFormLayout>
 #include <QFont>
@@ -64,6 +65,7 @@
 #include <mutex>
 #include <optional>
 #include <stdexcept>
+#include <new>
 #include <thread>
 #include <vector>
 #include <limits>
@@ -1284,11 +1286,8 @@ private:
     connect(circuitResetBtn_, &QPushButton::clicked, [this] { circuitReset(); });
     connect(circuitStepBackBtn_, &QPushButton::clicked, [this] { circuitStepBackward(); });
     connect(circuitStepFwdBtn_, &QPushButton::clicked, [this] { circuitStepForward(); });
-    connect(circuitPlayBtn_, &QPushButton::clicked, [this] {
-      if (circuitSession_ && circuitSession_->isComplete()) circuitSession_->reset();
-      circuitPlayTimer_.start();
-    });
-    connect(circuitPauseBtn_, &QPushButton::clicked, [this] { circuitPlayTimer_.stop(); });
+    connect(circuitPlayBtn_, &QPushButton::clicked, [this] { circuitPlay(); });
+    connect(circuitPauseBtn_, &QPushButton::clicked, [this] { circuitPause(); });
     connect(&circuitPlayTimer_, &QTimer::timeout, [this] { circuitStepForward(); });
     connect(circuitStepSlider_, &QSlider::valueChanged, [this](int val) { circuitSeek(val); });
     connect(viewOptimizedRadio_, &QRadioButton::toggled, [this] { refreshCircuitFromCompilation(); });
@@ -2350,18 +2349,11 @@ private:
       }
       diagnosticsTable_->show();
 
-      circuitSession_.reset();
-      circuitPlayTimer_.stop();
+      clearCircuitSimulationPresentation(
+          QStringLiteral("Compilation error: simulation disabled"),
+          QStringLiteral("Register: 0 Qubits"),
+          QStringLiteral("STEP 0 / 0"));
       if (circuitView_) circuitView_->setCircuit({}, 0);
-      if (circuitStepSlider_) circuitStepSlider_->setRange(0, 0);
-      if (circuitStepLabel_) circuitStepLabel_->setText(QStringLiteral("STEP 0 / 0"));
-      if (circuitStageLabel_) circuitStageLabel_->setText(QStringLiteral("Compilation error: simulation disabled"));
-      if (circuitMetricsLabel_) circuitMetricsLabel_->setText(QStringLiteral("Register: 0 Qubits"));
-      if (circuitMeasurementBanner_) circuitMeasurementBanner_->hide();
-      if (circuitStateTable_) circuitStateTable_->setRowCount(0);
-      if (circuitStepBackBtn_) circuitStepBackBtn_->setEnabled(false);
-      if (circuitStepFwdBtn_) circuitStepFwdBtn_->setEnabled(false);
-      if (circuitResetBtn_) circuitResetBtn_->setEnabled(false);
     }
   }
 
@@ -2371,30 +2363,197 @@ private:
         ? lastCompilation_.instructions
         : lastCompilation_.rawInstructions;
     const int qubitCount = static_cast<int>(lastCompilation_.qubitCount);
+    const QString metrics = QStringLiteral("Register: %1 Qubits · Simulation unavailable")
+                                .arg(qubitCount);
+    const QString stepText = QStringLiteral("STEP 0 / %1").arg(instructions.size());
 
     circuitPlayTimer_.stop();
-    try {
-      circuitSession_ = std::make_unique<SimulationSession>(instructions, qubitCount);
-    } catch (const std::exception &err) {
-      compileStatusLabel_->setText(QStringLiteral("SIMULATOR ERROR: ") + QString::fromStdString(err.what()));
-      compileStatusLabel_->setStyleSheet(QStringLiteral("color:#f43f5e;font-weight:bold;"));
-      circuitSession_.reset();
-      return;
-    }
-
-    if (circuitStepSlider_) {
-      circuitStepSlider_->blockSignals(true);
-      circuitStepSlider_->setRange(0, static_cast<int>(circuitSession_->totalSteps()));
-      circuitStepSlider_->setValue(0);
-      circuitStepSlider_->blockSignals(false);
-    }
-
+    circuitSession_.reset();
+    circuitAvailableStepLimit_ = 0;
     if (circuitView_) {
       circuitView_->setCircuit(instructions, qubitCount);
       circuitView_->setCurrentStep(0);
     }
+    clearCircuitSimulationPresentation(
+        QStringLiteral("Initializing simulation…"),
+        QStringLiteral("Register: %1 Qubits · Simulation initializing").arg(qubitCount),
+        stepText);
 
+    try {
+      circuitSession_ = std::make_unique<SimulationSession>(instructions, qubitCount);
+    } catch (const std::exception &error) {
+      clearCircuitSimulationPresentation(
+          QStringLiteral("Simulation unavailable for compiled circuit"),
+          metrics,
+          stepText);
+      setCircuitFailureStatus(QStringLiteral("SIMULATOR"), error);
+      return;
+    }
+
+    circuitAvailableStepLimit_ = circuitSession_->totalSteps();
+    updateCircuitExecutionDisplay();
+  }
+
+  void clearCircuitSimulationPresentation(
+      const QString &stageText,
+      const QString &metricsText,
+      const QString &stepText
+  ) {
+    circuitSession_.reset();
+    circuitAvailableStepLimit_ = 0;
+    circuitPlayTimer_.stop();
+    if (circuitStepSlider_) {
+      circuitStepSlider_->blockSignals(true);
+      circuitStepSlider_->setRange(0, 0);
+      circuitStepSlider_->setValue(0);
+      circuitStepSlider_->blockSignals(false);
+      circuitStepSlider_->setEnabled(false);
+    }
+    if (circuitStepLabel_) circuitStepLabel_->setText(stepText);
+    if (circuitStageLabel_) circuitStageLabel_->setText(stageText);
+    if (circuitMetricsLabel_) circuitMetricsLabel_->setText(metricsText);
+    if (circuitMeasurementBanner_) {
+      circuitMeasurementBanner_->clear();
+      circuitMeasurementBanner_->hide();
+    }
+    if (circuitStateTable_) circuitStateTable_->setRowCount(0);
+    if (circuitResetBtn_) circuitResetBtn_->setEnabled(false);
+    if (circuitStepBackBtn_) circuitStepBackBtn_->setEnabled(false);
+    if (circuitStepFwdBtn_) circuitStepFwdBtn_->setEnabled(false);
+    if (circuitPlayBtn_) circuitPlayBtn_->setEnabled(false);
+    if (circuitPauseBtn_) circuitPauseBtn_->setEnabled(false);
+  }
+
+  QString circuitFailureMessage(
+      const QString &operation,
+      const std::exception &error
+  ) const {
+    const QString detail = QString::fromLocal8Bit(error.what());
+    if (dynamic_cast<const std::length_error *>(&error) != nullptr ||
+        dynamic_cast<const std::bad_alloc *>(&error) != nullptr) {
+      return operation + QStringLiteral(" RESOURCE LIMIT: ") + detail;
+    }
+    if (dynamic_cast<const std::invalid_argument *>(&error) != nullptr ||
+        dynamic_cast<const std::out_of_range *>(&error) != nullptr) {
+      return operation + QStringLiteral(" INPUT ERROR: ") + detail;
+    }
+    return operation + QStringLiteral(" FAILED: ") + detail;
+  }
+
+  void setCircuitFailureStatus(
+      const QString &operation,
+      const std::exception &error
+  ) {
+    if (!compileStatusLabel_) return;
+    compileStatusLabel_->setText(circuitFailureMessage(operation, error));
+    compileStatusLabel_->setStyleSheet(QStringLiteral("color:#f43f5e;font-weight:bold;"));
+  }
+
+  void updateCircuitExecutionDisplay() {
+    if (!circuitSession_) return;
+    const std::size_t step = circuitSession_->currentStep();
+    if (circuitStepSlider_) {
+      circuitStepSlider_->blockSignals(true);
+      circuitStepSlider_->setRange(0, static_cast<int>(circuitAvailableStepLimit_));
+      circuitStepSlider_->setValue(static_cast<int>(step));
+      circuitStepSlider_->blockSignals(false);
+      circuitStepSlider_->setEnabled(circuitAvailableStepLimit_ > 0);
+    }
+    if (circuitView_) circuitView_->setCurrentStep(step);
     refreshCircuitStateInspection();
+  }
+
+  void handleCircuitExecutionFailure(const std::exception &error) {
+    circuitPlayTimer_.stop();
+    if (circuitSession_) {
+      circuitAvailableStepLimit_ = circuitSession_->currentStep();
+      updateCircuitExecutionDisplay();
+    }
+    setCircuitFailureStatus(QStringLiteral("SIMULATION"), error);
+  }
+
+  void circuitPlay() {
+    if (!circuitSession_) return;
+    try {
+      if (circuitSession_->isComplete() &&
+          circuitAvailableStepLimit_ == circuitSession_->totalSteps()) {
+        circuitSession_->reset();
+        updateCircuitExecutionDisplay();
+      }
+      if (circuitSession_->currentStep() >= circuitAvailableStepLimit_) {
+        circuitPlayTimer_.stop();
+        refreshCircuitStateInspection();
+        return;
+      }
+      circuitPlayTimer_.start();
+      refreshCircuitStateInspection();
+    } catch (const std::exception &error) {
+      handleCircuitExecutionFailure(error);
+    }
+  }
+
+  void circuitPause() {
+    circuitPlayTimer_.stop();
+    if (circuitSession_) refreshCircuitStateInspection();
+  }
+
+  void circuitStepForward() {
+    if (!circuitSession_) return;
+    if (circuitSession_->currentStep() >= circuitAvailableStepLimit_) {
+      circuitPlayTimer_.stop();
+      refreshCircuitStateInspection();
+      return;
+    }
+    try {
+      if (smokeTest_ && injectNextCircuitStepResourceFailureForSmoke_) {
+        injectNextCircuitStepResourceFailureForSmoke_ = false;
+        throw std::length_error("Test-injected snapshot memory limit");
+      }
+      circuitSession_->stepForward();
+    } catch (const std::exception &error) {
+      handleCircuitExecutionFailure(error);
+      return;
+    }
+    if (circuitSession_->isComplete()) circuitPlayTimer_.stop();
+    updateCircuitExecutionDisplay();
+  }
+
+  void circuitStepBackward() {
+    if (!circuitSession_ || circuitSession_->currentStep() == 0) return;
+    circuitPlayTimer_.stop();
+    try {
+      circuitSession_->stepBackward();
+    } catch (const std::exception &error) {
+      handleCircuitExecutionFailure(error);
+      return;
+    }
+    updateCircuitExecutionDisplay();
+  }
+
+  void circuitReset() {
+    if (!circuitSession_) return;
+    circuitPlayTimer_.stop();
+    try {
+      circuitSession_->reset();
+    } catch (const std::exception &error) {
+      handleCircuitExecutionFailure(error);
+      return;
+    }
+    updateCircuitExecutionDisplay();
+  }
+
+  void circuitSeek(int step) {
+    if (!circuitSession_ || step < 0) return;
+    circuitPlayTimer_.stop();
+    const auto boundedStep = std::min(
+        static_cast<std::size_t>(step), circuitAvailableStepLimit_);
+    try {
+      circuitSession_->seek(boundedStep);
+    } catch (const std::exception &error) {
+      handleCircuitExecutionFailure(error);
+      return;
+    }
+    updateCircuitExecutionDisplay();
   }
 
   void refreshCircuitStateInspection() {
@@ -2431,7 +2590,6 @@ private:
     }
 
     const auto &state = circuitSession_->currentState();
-    const auto probs = circuitSession_->basisProbabilities();
     const int n = circuitSession_->qubitCount();
     const std::size_t dimension = state.size();
 
@@ -2445,8 +2603,7 @@ private:
 
       for (std::size_t i = 0; i < rowsToDisplay; ++i) {
         const auto &amp = state[i];
-        const double p = probs[i];
-
+        const double p = std::norm(amp);
         const QString basisStr = QStringLiteral("|%1⟩ (index %2)")
                                      .arg(QString::number(i, 2).rightJustified(n, QLatin1Char('0')))
                                      .arg(i);
@@ -2497,68 +2654,17 @@ private:
               .arg(std::abs(norm - 1.0) < 1e-10 ? QStringLiteral("Normalized") : QStringLiteral("Invalid")));
     }
 
+    if (circuitStepSlider_) circuitStepSlider_->setEnabled(circuitAvailableStepLimit_ > 0);
     if (circuitStepBackBtn_) circuitStepBackBtn_->setEnabled(step > 0);
-    if (circuitStepFwdBtn_) circuitStepFwdBtn_->setEnabled(step < total);
+    if (circuitStepFwdBtn_) circuitStepFwdBtn_->setEnabled(step < circuitAvailableStepLimit_);
     if (circuitResetBtn_) circuitResetBtn_->setEnabled(step > 0);
+    if (circuitPlayBtn_) {
+      const bool canRestart = step == total && circuitAvailableStepLimit_ == total && total > 0;
+      circuitPlayBtn_->setEnabled(step < circuitAvailableStepLimit_ || canRestart);
+    }
+    if (circuitPauseBtn_) circuitPauseBtn_->setEnabled(circuitPlayTimer_.isActive());
   }
 
-  void circuitStepForward() {
-    if (!circuitSession_) return;
-    if (circuitSession_->isComplete()) {
-      circuitPlayTimer_.stop();
-      return;
-    }
-    circuitSession_->stepForward();
-    if (circuitStepSlider_) {
-      circuitStepSlider_->blockSignals(true);
-      circuitStepSlider_->setValue(static_cast<int>(circuitSession_->currentStep()));
-      circuitStepSlider_->blockSignals(false);
-    }
-    if (circuitView_) {
-      circuitView_->setCurrentStep(circuitSession_->currentStep());
-    }
-    refreshCircuitStateInspection();
-  }
-
-  void circuitStepBackward() {
-    if (!circuitSession_ || circuitSession_->currentStep() == 0) return;
-    circuitPlayTimer_.stop();
-    circuitSession_->stepBackward();
-    if (circuitStepSlider_) {
-      circuitStepSlider_->blockSignals(true);
-      circuitStepSlider_->setValue(static_cast<int>(circuitSession_->currentStep()));
-      circuitStepSlider_->blockSignals(false);
-    }
-    if (circuitView_) {
-      circuitView_->setCurrentStep(circuitSession_->currentStep());
-    }
-    refreshCircuitStateInspection();
-  }
-
-  void circuitReset() {
-    if (!circuitSession_) return;
-    circuitPlayTimer_.stop();
-    circuitSession_->reset();
-    if (circuitStepSlider_) {
-      circuitStepSlider_->blockSignals(true);
-      circuitStepSlider_->setValue(0);
-      circuitStepSlider_->blockSignals(false);
-    }
-    if (circuitView_) {
-      circuitView_->setCurrentStep(0);
-    }
-    refreshCircuitStateInspection();
-  }
-
-  void circuitSeek(int step) {
-    if (!circuitSession_) return;
-    circuitPlayTimer_.stop();
-    circuitSession_->seek(static_cast<std::size_t>(step));
-    if (circuitView_) {
-      circuitView_->setCurrentStep(circuitSession_->currentStep());
-    }
-    refreshCircuitStateInspection();
-  }
 
   void post(UiMessage message) {
     std::lock_guard<std::mutex> lock(messagesMutex_);
@@ -2831,10 +2937,156 @@ private:
       finishSmokeTest(false, QStringLiteral("step forward did not preserve recorded measurement outcome"));
       return;
     }
-    // Reset: verify rewind to step 0
+    if (!circuitMeasurementBanner_ || circuitMeasurementBanner_->isHidden()) {
+      finishSmokeTest(false, QStringLiteral("completed Bell run did not expose its measurement result"));
+      return;
+    }
+
+    auto compileSmokeSource = [this](const QString &source) {
+      isCompiling_ = true;
+      dslEditor_->setPlainText(source);
+      isCompiling_ = false;
+      compileDsl();
+    };
+
+    QStringList unsupportedQubits;
+    for (int i = 0; i < 25; ++i) {
+      unsupportedQubits << QStringLiteral("q%1").arg(i);
+    }
+    compileSmokeSource(QStringLiteral("qubit %1\nH q0\nmeasure q0\n")
+                           .arg(unsupportedQubits.join(QStringLiteral(", "))));
+    if (!lastCompilation_.success || circuitSession_ ||
+        circuitView_->qubitCount() != 25 || circuitView_->instructionCount() != 2 ||
+        circuitView_->currentStep() != 0 ||
+        !compileStatusLabel_->text().contains(QStringLiteral("SIMULATOR INPUT ERROR")) ||
+        !compileStatusLabel_->text().contains(QStringLiteral("24 qubits")) ||
+        !circuitMeasurementBanner_->isHidden() || circuitStateTable_->rowCount() != 0 ||
+        circuitStepSlider_->isEnabled() || circuitStepFwdBtn_->isEnabled() ||
+        circuitPlayBtn_->isEnabled()) {
+      finishSmokeTest(false, QStringLiteral("failed simulator initialization retained stale output or enabled execution"));
+      return;
+    }
+
+    loadPresetExample(0);
+    circuitStepFwdBtn_->click();
+    circuitStepFwdBtn_->click();
+    circuitStepFwdBtn_->click();
+    if (!circuitSession_->lastMeasurementResult().has_value() ||
+        circuitMeasurementBanner_->isHidden()) {
+      finishSmokeTest(false, QStringLiteral("Bell measurement setup for compilation-failure check did not complete"));
+      return;
+    }
+    compileSmokeSource(QStringLiteral("qubit q0\nH missing\n"));
+    if (lastCompilation_.success || circuitSession_ ||
+        circuitView_->qubitCount() != 0 || circuitView_->instructionCount() != 0 ||
+        !circuitMeasurementBanner_->isHidden() || circuitStateTable_->rowCount() != 0 ||
+        diagnosticsTable_->isHidden() ||
+        !compileStatusLabel_->text().contains(QStringLiteral("COMPILATION FAILED"))) {
+      finishSmokeTest(false, QStringLiteral("compilation failure did not preserve diagnostics while clearing old run output"));
+      return;
+    }
+
+    compileSmokeSource(QStringLiteral("qubit q0\nH q0\n"));
+    circuitStepFwdBtn_->click();
+    if (!lastCompilation_.success || !circuitSession_ ||
+        circuitStateTable_->rowCount() != 2 ||
+        !circuitStateTable_->item(0, 0) || !circuitStateTable_->item(1, 0) ||
+        !circuitStateTable_->item(0, 0)->text().contains(QStringLiteral("index 0")) ||
+        !circuitStateTable_->item(1, 0)->text().contains(QStringLiteral("index 1")) ||
+        !circuitStateTable_->item(0, 2) || !circuitStateTable_->item(1, 2) ||
+        std::abs(circuitStateTable_->item(0, 2)->text().toDouble() - 0.5) > 1e-12 ||
+        std::abs(circuitStateTable_->item(1, 2)->text().toDouble() - 0.5) > 1e-12 ||
+        !circuitMetricsLabel_->text().contains(QStringLiteral("Normalized"))) {
+      finishSmokeTest(false, QStringLiteral("one-qubit probability display has incorrect range or values"));
+      return;
+    }
+
+    QStringList largeQubits;
+    for (int i = 0; i < 8; ++i) {
+      largeQubits << QStringLiteral("q%1").arg(i);
+    }
+    compileSmokeSource(QStringLiteral("qubit %1\nH q0\n")
+                           .arg(largeQubits.join(QStringLiteral(", "))));
+    circuitStepFwdBtn_->click();
+    if (!lastCompilation_.success || !circuitSession_ ||
+        circuitStateTable_->rowCount() != 129 ||
+        !circuitStateTable_->item(0, 0) || !circuitStateTable_->item(1, 0) ||
+        !circuitStateTable_->item(0, 0)->text().contains(QStringLiteral("index 0")) ||
+        !circuitStateTable_->item(1, 0)->text().contains(QStringLiteral("index 1")) ||
+        !circuitStateTable_->item(0, 2) || !circuitStateTable_->item(1, 2) ||
+        !circuitStateTable_->item(128, 0) ||
+        !circuitStateTable_->item(128, 0)->text().contains(QStringLiteral("128 additional")) ||
+        std::abs(circuitStateTable_->item(0, 2)->text().toDouble() - 0.5) > 1e-12 ||
+        std::abs(circuitStateTable_->item(1, 2)->text().toDouble() - 0.5) > 1e-12 ||
+        !circuitMetricsLabel_->text().contains(QStringLiteral("Normalized"))) {
+      finishSmokeTest(false, QStringLiteral("large-state inspector did not display a bounded 128-row prefix"));
+      return;
+    }
+
+    loadPresetExample(0);
+    if (!circuitSession_ || circuitSession_->currentStep() != 0) {
+      finishSmokeTest(false, QStringLiteral("Bell preset did not restore a fresh interactive session"));
+      return;
+    }
+    circuitStepFwdBtn_->click();
+    if (circuitSession_->currentStep() != 1 || circuitStepSlider_->value() != 1 ||
+        circuitView_->currentStep() != 1 || !circuitStateTable_->item(0, 2) ||
+        !circuitStateTable_->item(1, 2) ||
+        std::abs(circuitStateTable_->item(0, 2)->text().toDouble() - 0.5) > 1e-12 ||
+        std::abs(circuitStateTable_->item(1, 2)->text().toDouble() - 0.5) > 1e-12) {
+      finishSmokeTest(false, QStringLiteral("successful pre-failure step was not reflected consistently"));
+      return;
+    }
+    injectNextCircuitStepResourceFailureForSmoke_ = true;
+    circuitPlayBtn_->click();
+    if (!circuitPlayTimer_.isActive()) {
+      finishSmokeTest(false, QStringLiteral("playback did not start before injected step failure"));
+      return;
+    }
+    QEventLoop failureLoop;
+    QTimer::singleShot(circuitPlayTimer_.interval() + 50, &failureLoop, &QEventLoop::quit);
+    failureLoop.exec();
+    if (circuitPlayTimer_.isActive() || circuitSession_->currentStep() != 1 ||
+        circuitStepSlider_->value() != 1 || circuitStepSlider_->maximum() != 1 ||
+        circuitView_->currentStep() != 1 || circuitStepFwdBtn_->isEnabled() ||
+        circuitPlayBtn_->isEnabled() ||
+        !compileStatusLabel_->text().contains(QStringLiteral("SIMULATION RESOURCE LIMIT")) ||
+        !compileStatusLabel_->text().contains(QStringLiteral("Test-injected snapshot memory limit")) ||
+        !circuitStateTable_->item(0, 2) || !circuitStateTable_->item(1, 2) ||
+        std::abs(circuitStateTable_->item(0, 2)->text().toDouble() - 0.5) > 1e-12 ||
+        std::abs(circuitStateTable_->item(1, 2)->text().toDouble() - 0.5) > 1e-12) {
+      finishSmokeTest(false, QStringLiteral("failed playback step advanced the UI or left its timer active"));
+      return;
+    }
+    circuitPlay();
+    circuitStepForward();
+    if (circuitPlayTimer_.isActive() || circuitSession_->currentStep() != 1 ||
+        circuitStepSlider_->value() != 1 || circuitView_->currentStep() != 1) {
+      finishSmokeTest(false, QStringLiteral("repeated playback attempts changed the last valid step or restarted the timer"));
+      return;
+    }
+
+    loadPresetExample(0);
+    if (!circuitSession_ || circuitSession_->currentStep() != 0) {
+      finishSmokeTest(false, QStringLiteral("Bell preset did not recover after resource failure"));
+      return;
+    }
+    circuitStepFwdBtn_->click();
+    circuitStepFwdBtn_->click();
+    circuitStepSlider_->setValue(1);
+    if (circuitSession_->currentStep() != 1 || circuitStepSlider_->value() != 1 ||
+        circuitView_->currentStep() != 1 || !circuitStateTable_->item(0, 2) ||
+        !circuitStateTable_->item(1, 2) ||
+        std::abs(circuitStateTable_->item(0, 2)->text().toDouble() - 0.5) > 1e-12 ||
+        std::abs(circuitStateTable_->item(1, 2)->text().toDouble() - 0.5) > 1e-12) {
+      finishSmokeTest(false, QStringLiteral("slider seek did not synchronize the last selected Bell-state stage"));
+      return;
+    }
     circuitResetBtn_->click();
-    if (circuitSession_->currentStep() != 0) {
-      finishSmokeTest(false, QStringLiteral("circuit reset did not rewind to step 0"));
+    if (circuitSession_->currentStep() != 0 || circuitStepSlider_->value() != 0 ||
+        circuitView_->currentStep() != 0 || !circuitStateTable_->item(0, 2) ||
+        std::abs(circuitStateTable_->item(0, 2)->text().toDouble() - 1.0) > 1e-12) {
+      finishSmokeTest(false, QStringLiteral("reset did not synchronize the initial circuit and state"));
       return;
     }
 
@@ -3121,6 +3373,8 @@ private:
   QTimer dslDebounceTimer_;
   compiler::CompilationResult lastCompilation_;
   std::unique_ptr<SimulationSession> circuitSession_;
+  std::size_t circuitAvailableStepLimit_ = 0;
+  bool injectNextCircuitStepResourceFailureForSmoke_ = false;
   bool isCompiling_ = false;
 
   // Milestone 4: Persistence, Comparison & Export

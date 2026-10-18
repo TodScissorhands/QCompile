@@ -46,7 +46,7 @@ Source File (.txt)
 
 | Subsystem | Headers | Implementation | Purpose |
 | :--- | :--- | :--- | :--- |
-| **Compiler** | `include/compiler/` | `src/compiler/` | Lexer, AST parser, semantic checker, code generator, and adjacent-gate optimizer |
+| **Compiler** | `include/compiler/` | `src/compiler/` | Lexer, AST parser, semantic checker, code generator, and DAG-based circuit optimizer |
 | **Simulator** | `include/simulator/` | `src/simulator/` | Statevector simulator, single/two-qubit gates, measurement, and Pauli expectations |
 | **Chemistry** | `include/chemistry/` | `src/chemistry/` | Qubit Hamiltonians, Jacobi eigensolver, H₂ VQE, HeH⁺ VQE, and benchmark catalog |
 | **GUI** | — | `src/gui/h2_lab.cpp` | Interactive Qt6 desktop workbench for H₂ potential energy surface inspection |
@@ -191,10 +191,10 @@ Open `http://127.0.0.1:4173` in a web browser. The server executes allowlisted b
 
 ## Technical Limitations
 
-- **Statevector Scaling**: The statevector simulator allocates $2^n$ complex amplitudes (`std::complex<double>`). Qubit counts are capped at 24 qubits (~256 MiB amplitude buffer) to prevent memory exhaustion.
+- **Statevector Scaling**: The simulator allocates $2^n$ complex amplitudes (`std::complex<double>`) and supports at most 24 qubits; one 24-qubit statevector uses about 256 MiB. Interactive `SimulationSession`s additionally cap the combined statevector payload of the active simulator and retained step snapshots at 512 MiB, excluding allocator and other process overhead. At 24 qubits the initial session uses that full cap, so its first execution step is rejected before applying the instruction.
 - **Measurement Model**: Measurements calculate probabilities, sample basis outcomes using a seeded PRNG (`std::mt19937`), project the statevector onto the observed subspace, and renormalize, preserving conditional states and entanglement on unmeasured qubits.
 - **Gate Set**: Supported unitary operations are restricted to `H`, `X`, `Z`, `CNOT`, and `RZ`. General arbitrary single-qubit rotations or multi-qubit controlled gates require decomposition before input.
-- **Optimizer Scope**: The adjacent-gate optimizer performs local pairwise self-inverse cancellations ($H^2=I$, $X^2=I$, $Z^2=I$, $\text{CNOT}^2=I$) on identical adjacent operations. It does not reorder non-commuting gates or synthesize multi-qubit topologies.
+- **Optimizer Scope**: The DAG optimizer cancels recognized matching H/X/Z and ordered CNOT pairs and merges finite RZ rotations. It can bring eligible operations together across explicitly commuting gates, including disjoint supports and specified Z/RZ–CNOT cases; measurements are barriers. It does not perform general gate synthesis or hardware scheduling.
 - **Chemistry Benchmarks**: The H₂, HeH⁺, and LiH commands validate fixed STO-3G models and specified symmetry/active-space sectors. They are not an arbitrary quantum chemistry platform; geometry-generated support is restricted to the documented H₂ path.
 
 ---
