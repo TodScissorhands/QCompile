@@ -6,6 +6,7 @@
 #include "compiler/compiler_facade.h"
 #include "gui/circuit_view.h"
 #include "experiment/experiment_bundle.h"
+#include "compiler/circuit_dag.h"
 #include <QAbstractItemView>
 #include <QFileDialog>
 #include <QMessageBox>
@@ -42,6 +43,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonParseError>
+#include <QScrollBar>
 #include <QScrollArea>
 #include <QSlider>
 #include <QSplitter>
@@ -1178,8 +1180,8 @@ private:
     rightLayout->setContentsMargins(0, 0, 0, 0);
     rightLayout->setSpacing(6);
 
-    // Upper: Circuit Visualizer & Stepper Controls
-    auto *circuitBox = new QGroupBox(QStringLiteral("CIRCUIT VISUALIZATION & STEPPER CONTROLS"));
+    auto *circuitBox = new QGroupBox(QStringLiteral(
+        "CIRCUIT VISUALIZATION // LOGICAL LAYERS, SEQUENTIAL EXECUTION"));
     auto *circuitBoxLayout = new QVBoxLayout(circuitBox);
     circuitBoxLayout->setContentsMargins(8, 12, 8, 8);
     circuitBoxLayout->setSpacing(6);
@@ -1188,11 +1190,16 @@ private:
     auto *controls = new QHBoxLayout;
     controls->setSpacing(6);
 
-    circuitResetBtn_ = new QPushButton(QStringLiteral("⏮ Reset"));
-    circuitStepBackBtn_ = new QPushButton(QStringLiteral("◀| Step Back"));
-    circuitStepFwdBtn_ = new QPushButton(QStringLiteral("Step Fwd |▶"));
+    circuitResetBtn_ = new QPushButton(QStringLiteral("Reset"));
+    circuitStepBackBtn_ = new QPushButton(QStringLiteral("◀ Back"));
+    circuitStepFwdBtn_ = new QPushButton(QStringLiteral("Next ▶"));
     circuitPlayBtn_ = new QPushButton(QStringLiteral("▶ Play"));
     circuitPauseBtn_ = new QPushButton(QStringLiteral("⏸ Pause"));
+    circuitResetBtn_->setToolTip(QStringLiteral("Reset to the initial state"));
+    circuitStepBackBtn_->setToolTip(QStringLiteral("Step backward"));
+    circuitStepFwdBtn_->setToolTip(QStringLiteral("Step forward"));
+    circuitPlayBtn_->setToolTip(QStringLiteral("Play sequential instructions"));
+    circuitPauseBtn_->setToolTip(QStringLiteral("Pause playback"));
     circuitResetBtn_->setFixedHeight(24);
     circuitStepBackBtn_->setFixedHeight(24);
     circuitStepFwdBtn_->setFixedHeight(24);
@@ -1221,21 +1228,27 @@ private:
     controls->addWidget(circuitPauseBtn_);
     controls->addWidget(circuitStepSlider_, 1);
     controls->addWidget(circuitStepLabel_);
-    controls->addWidget(viewOptimizedRadio_);
-    controls->addWidget(viewRawRadio_);
+    auto *viewControls = new QHBoxLayout;
+    viewControls->setSpacing(6);
+    viewControls->addWidget(viewOptimizedRadio_);
+    viewControls->addWidget(viewRawRadio_);
+    viewControls->addStretch(1);
     circuitBoxLayout->addLayout(controls);
+    circuitBoxLayout->addLayout(viewControls);
 
-    // Circuit View Widget in ScrollArea
     circuitView_ = new CircuitView;
-    auto *scroll = new QScrollArea;
-    scroll->setWidget(circuitView_);
-    scroll->setWidgetResizable(true);
-    scroll->setFixedHeight(175);
-    scroll->setStyleSheet(QStringLiteral("QScrollArea { border:1px solid #1e293b; background:#0b0f17; }"));
-    circuitBoxLayout->addWidget(scroll);
-
-    rightLayout->addWidget(circuitBox, 0);
-
+    circuitScrollArea_ = new QScrollArea;
+    circuitScrollArea_->setWidget(circuitView_);
+    circuitScrollArea_->setWidgetResizable(true);
+    circuitScrollArea_->setMinimumHeight(180);
+    circuitScrollArea_->setStyleSheet(QStringLiteral("QScrollArea { border:1px solid #1e293b; background:#0b0f17; }"));
+    circuitScrollArea_->viewport()->installEventFilter(this);
+    circuitViewportHint_ = new QLabel;
+    circuitViewportHint_->setWordWrap(true);
+    circuitViewportHint_->setStyleSheet(QStringLiteral("font-family:monospace;font-size:9px;color:#fbbf24"));
+    circuitViewportHint_->hide();
+    circuitBoxLayout->addWidget(circuitScrollArea_);
+    circuitBoxLayout->addWidget(circuitViewportHint_);
     // Lower: Statevector & Measurement Inspector
     auto *stateBox = new QGroupBox(QStringLiteral("QUANTUM STATE & MEASUREMENT INSPECTOR"));
     auto *stateBoxLayout = new QVBoxLayout(stateBox);
@@ -1276,7 +1289,14 @@ private:
     circuitStateTable_->setSelectionMode(QAbstractItemView::SingleSelection);
     stateBoxLayout->addWidget(circuitStateTable_, 1);
 
-    rightLayout->addWidget(stateBox, 1);
+    auto *circuitStateSplitter = new QSplitter(Qt::Vertical, rightPane);
+    circuitStateSplitter->setChildrenCollapsible(false);
+    circuitStateSplitter->addWidget(circuitBox);
+    circuitStateSplitter->addWidget(stateBox);
+    circuitStateSplitter->setStretchFactor(0, 1);
+    circuitStateSplitter->setStretchFactor(1, 2);
+    circuitStateSplitter->setSizes({350, 500});
+    rightLayout->addWidget(circuitStateSplitter, 1);
     splitter->addWidget(rightPane);
 
     splitter->setStretchFactor(0, 9);
@@ -2541,7 +2561,7 @@ private:
 
     if (lastCompilation_.success) {
       compileStatusLabel_->setText(
-          QStringLiteral("COMPILED · %1 gate(s) · Depth %2 · %3 qubit(s)")
+          QStringLiteral("COMPILED · %1 gate(s) · %2 logical layer(s) · %3 qubit(s)")
               .arg(lastCompilation_.instructions.size())
               .arg(lastCompilation_.optimizedDepth)
               .arg(lastCompilation_.qubitCount));
@@ -2591,9 +2611,21 @@ private:
 
   void refreshCircuitFromCompilation() {
     if (!lastCompilation_.success) return;
-    const auto &instructions = (viewOptimizedRadio_ && viewOptimizedRadio_->isChecked())
+    const bool optimizedView = viewOptimizedRadio_ && viewOptimizedRadio_->isChecked();
+    const auto &instructions = optimizedView
         ? lastCompilation_.instructions
         : lastCompilation_.rawInstructions;
+    const std::size_t displayedDepth = optimizedView
+        ? lastCompilation_.optimizedDepth
+        : lastCompilation_.rawDepth;
+    if (compileStatusLabel_) {
+      compileStatusLabel_->setText(
+          QStringLiteral("COMPILED · %1 %2 gate(s) · %3 logical layer(s) · %4 qubit(s)")
+              .arg(optimizedView ? QStringLiteral("optimized") : QStringLiteral("raw"))
+              .arg(instructions.size())
+              .arg(displayedDepth)
+              .arg(lastCompilation_.qubitCount));
+    }
     const int qubitCount = static_cast<int>(lastCompilation_.qubitCount);
     const QString metrics = QStringLiteral("Register: %1 Qubits · Simulation unavailable")
                                 .arg(qubitCount);
@@ -2604,7 +2636,13 @@ private:
     circuitAvailableStepLimit_ = 0;
     if (circuitView_) {
       circuitView_->setCircuit(instructions, qubitCount);
+      circuitView_->setMinimumSize(circuitView_->sizeHint());
       circuitView_->setCurrentStep(0);
+      if (circuitScrollArea_) {
+        const int contentHeight = circuitView_->sizeHint().height();
+        circuitScrollArea_->setMinimumHeight(
+            std::clamp(contentHeight + 2, 180, 340));
+      }
     }
     clearCircuitSimulationPresentation(
         QStringLiteral("Initializing simulation…"),
@@ -2653,6 +2691,7 @@ private:
       circuitMeasurementBanner_->hide();
     }
     if (circuitStateTable_) circuitStateTable_->setRowCount(0);
+    if (circuitViewportHint_) circuitViewportHint_->hide();
     if (circuitResetBtn_) circuitResetBtn_->setEnabled(false);
     if (circuitStepBackBtn_) circuitStepBackBtn_->setEnabled(false);
     if (circuitStepFwdBtn_) circuitStepFwdBtn_->setEnabled(false);
@@ -2685,6 +2724,64 @@ private:
     compileStatusLabel_->setStyleSheet(QStringLiteral("color:#f43f5e;font-weight:bold;"));
   }
 
+  void followCircuitOperation(std::size_t step) {
+    if (!circuitView_ || !circuitScrollArea_ ||
+        step >= circuitView_->instructionCount()) {
+      if (circuitViewportHint_) circuitViewportHint_->hide();
+      return;
+    }
+    QWidget *viewport = circuitScrollArea_->viewport();
+    const QRect bounds = circuitView_->operationBounds(step);
+    const QSize viewportSize = viewport->size();
+    if (bounds.isEmpty() || viewportSize.isEmpty()) return;
+
+    const auto targetOffset = [](int relativeBegin, int length,
+                                 int viewportLength, int current, int maximum) {
+      int target = current;
+      if (length > viewportLength) {
+        target = current + relativeBegin + length / 2 - viewportLength / 2;
+      } else if (relativeBegin < 0) {
+        target = current + relativeBegin;
+      } else if (relativeBegin + length > viewportLength) {
+        target = current + relativeBegin + length - viewportLength;
+      }
+      return std::clamp(target, 0, maximum);
+    };
+    const QPoint position = circuitView_->mapTo(viewport, bounds.topLeft());
+    const int horizontal = targetOffset(
+        position.x(), bounds.width(), viewportSize.width(),
+        circuitScrollArea_->horizontalScrollBar()->value(),
+        circuitScrollArea_->horizontalScrollBar()->maximum());
+    const int vertical = targetOffset(
+        position.y(), bounds.height(), viewportSize.height(),
+        circuitScrollArea_->verticalScrollBar()->value(),
+        circuitScrollArea_->verticalScrollBar()->maximum());
+    circuitScrollArea_->horizontalScrollBar()->setValue(horizontal);
+    circuitScrollArea_->verticalScrollBar()->setValue(vertical);
+
+    const bool oversized = bounds.width() > viewportSize.width() ||
+                           bounds.height() > viewportSize.height();
+    if (circuitViewportHint_) {
+      if (oversized) {
+        circuitViewportHint_->setText(QStringLiteral(
+            "Active operation exceeds the viewport; it is centered. Scroll to inspect its full control/target span."));
+        circuitViewportHint_->show();
+      } else {
+        circuitViewportHint_->hide();
+      }
+    }
+  }
+
+  bool eventFilter(QObject *watched, QEvent *event) override {
+    if (circuitScrollArea_ && watched == circuitScrollArea_->viewport() &&
+        event->type() == QEvent::Resize) {
+      QTimer::singleShot(0, this, [this] {
+        if (circuitSession_) followCircuitOperation(circuitSession_->currentStep());
+      });
+    }
+    return QMainWindow::eventFilter(watched, event);
+  }
+
   void updateCircuitExecutionDisplay() {
     if (!circuitSession_) return;
     const std::size_t step = circuitSession_->currentStep();
@@ -2695,7 +2792,10 @@ private:
       circuitStepSlider_->blockSignals(false);
       circuitStepSlider_->setEnabled(circuitAvailableStepLimit_ > 0);
     }
-    if (circuitView_) circuitView_->setCurrentStep(step);
+    if (circuitView_) {
+      circuitView_->setCurrentStep(step);
+      followCircuitOperation(step);
+    }
     refreshCircuitStateInspection();
   }
 
@@ -3639,6 +3739,162 @@ private:
       finishSmokeTest(false, QStringLiteral("HeH+ trial sequence has unexpected instruction count"));
       return;
     }
+    const auto layoutMatchesDag = [](const CircuitView &view,
+                                     const std::vector<Instruction> &sequence,
+                                     int qubits, std::size_t expectedDepth) {
+      if (view.instructionCount() != sequence.size() ||
+          view.logicalDepth() != expectedDepth) return false;
+      const auto dag = compiler::CircuitDag::fromInstructions(
+          sequence, static_cast<std::size_t>(qubits));
+      if (dag.criticalPathDepth() != expectedDepth) return false;
+      for (const compiler::DagNode &node : dag.nodes()) {
+        if (node.id >= sequence.size()) return false;
+        const auto &layout = view.instructionLayout(node.id);
+        if (layout.instructionIndex != node.id ||
+            layout.simulationStep != node.id ||
+            layout.layerIndex != static_cast<std::size_t>(node.layer)) return false;
+      }
+      return true;
+    };
+
+    compiler::CompilerOptions layoutOptions;
+    layoutOptions.optimize = false;
+    const auto layoutProbe = compiler::compileProgram(
+        "qubit q0, q1, q2, q3\n"
+        "CNOT q0, q3\n"
+        "X q1\n"
+        "H q0\n"
+        "X q2\n",
+        layoutOptions);
+    compiler::CompilerOptions optimizedLayoutOptions;
+    optimizedLayoutOptions.optimize = true;
+    const auto optimizedLayoutProbe = compiler::compileProgram(
+        "qubit q0, q1, q2, q3\n"
+        "CNOT q0, q3\n"
+        "X q1\n"
+        "H q0\n"
+        "X q2\n",
+        optimizedLayoutOptions);
+    CircuitView layoutProbeView;
+    layoutProbeView.setCircuit(layoutProbe.rawInstructions, 4);
+    if (!layoutProbe.success || !optimizedLayoutProbe.success ||
+        !layoutMatchesDag(layoutProbeView, layoutProbe.rawInstructions, 4,
+                          layoutProbe.rawDepth) ||
+        layoutProbe.rawInstructions.size() != 4 ||
+        layoutProbeView.instructionLayout(0).layerIndex != 0 ||
+        layoutProbeView.instructionLayout(1).layerIndex != 0 ||
+        layoutProbeView.instructionLayout(3).layerIndex != 0 ||
+        layoutProbeView.instructionLayout(2).layerIndex != 1 ||
+        layoutProbeView.instructionLayout(0).laneIndex ==
+            layoutProbeView.instructionLayout(1).laneIndex ||
+        layoutProbeView.operationBounds(0).top() > 42 ||
+        layoutProbeView.operationBounds(0).bottom() < 42 + 3 * 52) {
+      finishSmokeTest(false, QStringLiteral("logical layer layout lost parallel gates, dependencies, or the full CNOT span"));
+      return;
+    }
+    layoutProbeView.setCircuit(optimizedLayoutProbe.instructions, 4);
+    if (!layoutMatchesDag(layoutProbeView, optimizedLayoutProbe.instructions, 4,
+                          optimizedLayoutProbe.optimizedDepth)) {
+      finishSmokeTest(false, QStringLiteral("optimized instructions were not mapped to their own DAG layers and steps"));
+      return;
+    }
+
+    viewRawRadio_->setChecked(true);
+    if (!layoutMatchesDag(*circuitView_, lastCompilation_.rawInstructions, 4,
+                          lastCompilation_.rawDepth)) {
+      finishSmokeTest(false, QStringLiteral("HeH+ raw display did not map to its sequential instruction indices"));
+      return;
+    }
+    std::size_t widestCnotStep = lastCompilation_.rawInstructions.size();
+    int widestCnotSpan = -1;
+    for (std::size_t i = 0; i < lastCompilation_.rawInstructions.size(); ++i) {
+      const auto &instruction = lastCompilation_.rawInstructions[i];
+      if (instruction.gateName == "CNOT" && instruction.qubitIndices.size() >= 2) {
+        const int span = std::abs(instruction.qubitIndices[0] -
+                                  instruction.qubitIndices[1]);
+        if (span > widestCnotSpan) {
+          widestCnotSpan = span;
+          widestCnotStep = i;
+        }
+      }
+    }
+    if (widestCnotStep == lastCompilation_.rawInstructions.size() ||
+        widestCnotSpan <= 0) {
+      finishSmokeTest(false, QStringLiteral("HeH+ circuit has no inspectable multi-qubit operation"));
+      return;
+    }
+    circuitStepSlider_->setValue(static_cast<int>(widestCnotStep));
+    const auto activeOperationVisible = [this](std::size_t step) {
+      if (!circuitScrollArea_ || step >= circuitView_->instructionCount() ||
+          circuitSession_->currentStep() != step ||
+          circuitView_->currentStep() != step ||
+          circuitStepSlider_->value() != static_cast<int>(step)) return false;
+      const QRect bounds = circuitView_->operationBounds(step);
+      QWidget *viewport = circuitScrollArea_->viewport();
+      const QRect viewportBounds(QPoint(0, 0), viewport->size());
+      const QRect mapped(circuitView_->mapTo(viewport, bounds.topLeft()), bounds.size());
+      if (bounds.width() <= viewport->width() &&
+          bounds.height() <= viewport->height()) {
+        return viewportBounds.contains(mapped);
+      }
+      return !circuitViewportHint_->isHidden() &&
+             viewportBounds.contains(circuitView_->mapTo(viewport, bounds.center()));
+    };
+    if (circuitSession_->currentStep() != widestCnotStep ||
+        !activeOperationVisible(widestCnotStep)) {
+      finishSmokeTest(false, QStringLiteral("seeking to a long-circuit CNOT did not expose its complete control/target span"));
+      return;
+    }
+    circuitStepFwdBtn_->click();
+    if (!activeOperationVisible(widestCnotStep + 1)) {
+      finishSmokeTest(false, QStringLiteral("forward stepping lost active-operation visibility or sequential mapping"));
+      return;
+    }
+    circuitStepBackBtn_->click();
+    if (!activeOperationVisible(widestCnotStep)) {
+      finishSmokeTest(false, QStringLiteral("backward stepping lost active-operation visibility or sequential mapping"));
+      return;
+    }
+
+    const auto captureCircuitAt = [this, &activeOperationVisible](int width, int height) {
+      showNormal();
+      resize(width, height);
+      if (mainTabs_) mainTabs_->setCurrentIndex(0);
+      QApplication::processEvents();
+      followCircuitOperation(circuitSession_->currentStep());
+      QApplication::processEvents();
+      if (!activeOperationVisible(circuitSession_->currentStep())) return false;
+      const QString path = QDir::tempPath() +
+          QStringLiteral("/qcompile-ms14-circuit-%1-%2.png")
+              .arg(width).arg(QDateTime::currentMSecsSinceEpoch());
+      if (!grab().save(path)) return false;
+      std::cout << "QCOMPILE_MS14_CIRCUIT_SCREENSHOT "
+                << path.toStdString() << std::endl;
+      return true;
+    };
+    if (!captureCircuitAt(1024, 680) || !captureCircuitAt(1440, 900)) {
+      finishSmokeTest(false, QStringLiteral("main circuit workbench clipping/active-operation check failed at a target window size"));
+      return;
+    }
+
+    const int playStart = static_cast<int>(circuitSession_->totalSteps()) - 5;
+    circuitStepSlider_->setValue(playStart);
+    if (circuitSession_->currentStep() != static_cast<std::size_t>(playStart)) {
+      finishSmokeTest(false, QStringLiteral("long-circuit seek did not set the sequential execution step"));
+      return;
+    }
+    circuitPlayBtn_->click();
+    QEventLoop playbackWait;
+    QTimer::singleShot(650, &playbackWait, &QEventLoop::quit);
+    playbackWait.exec();
+    circuitPauseBtn_->click();
+    if (circuitSession_->currentStep() <= static_cast<std::size_t>(playStart) ||
+        !activeOperationVisible(circuitSession_->currentStep())) {
+      finishSmokeTest(false, QStringLiteral("playback did not advance and follow the active HeH+ operation"));
+      return;
+    }
+    circuitResetBtn_->click();
+
     // Step forward 2 instructions: X q0, X q2
     circuitStepFwdBtn_->click();
     circuitStepFwdBtn_->click();
@@ -3658,6 +3914,20 @@ private:
       finishSmokeTest(false, QStringLiteral("optimization pass did not reduce HeH+ gate count"));
       return;
     }
+    viewOptimizedRadio_->setChecked(true);
+    if (!layoutMatchesDag(*circuitView_, lastCompilation_.instructions, 4,
+                          lastCompilation_.optimizedDepth) ||
+        !compileStatusLabel_->text().contains(QStringLiteral("optimized"))) {
+      finishSmokeTest(false, QStringLiteral("optimized HeH+ display did not report and render its own logical depth mapping"));
+      return;
+    }
+    viewRawRadio_->setChecked(true);
+    if (!layoutMatchesDag(*circuitView_, lastCompilation_.rawInstructions, 4,
+                          lastCompilation_.rawDepth)) {
+      finishSmokeTest(false, QStringLiteral("switching back to raw HeH+ did not restore its instruction mapping"));
+      return;
+    }
+    viewOptimizedRadio_->setChecked(true);
     circuitResetBtn_->click();
     exampleCombo_->setCurrentIndex(0);
 
@@ -3860,6 +4130,8 @@ private:
   QLabel *compileStatusLabel_ = nullptr;
   QTableWidget *diagnosticsTable_ = nullptr;
   CircuitView *circuitView_ = nullptr;
+  QScrollArea *circuitScrollArea_ = nullptr;
+  QLabel *circuitViewportHint_ = nullptr;
   QPushButton *circuitResetBtn_ = nullptr;
   QPushButton *circuitStepBackBtn_ = nullptr;
   QPushButton *circuitStepFwdBtn_ = nullptr;
