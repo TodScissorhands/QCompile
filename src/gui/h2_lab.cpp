@@ -959,6 +959,11 @@ private:
   QString statusText_ = QStringLiteral("Ready.");
 };
 
+struct ComparisonEntry {
+  ExperimentBundle bundle;
+  QString fileIdentity;
+};
+
 class MainWindow final : public QMainWindow {
 public:
   explicit MainWindow(bool smokeTest) : root_(repositoryRoot()), smokeTest_(smokeTest) {
@@ -1103,7 +1108,7 @@ private:
     leftLayout->setContentsMargins(8, 12, 8, 8);
     leftLayout->setSpacing(6);
 
-    // Toolbar row
+    // Keep the frequently used compile action separate from secondary actions.
     auto *toolbar = new QHBoxLayout;
     toolbar->setSpacing(8);
 
@@ -1136,12 +1141,17 @@ private:
     toolbar->addWidget(presetLabel);
     toolbar->addWidget(exampleCombo_, 1);
     toolbar->addWidget(compileBtn_);
-    toolbar->addWidget(optimizeCheck_);
-    toolbar->addWidget(saveExpBtn_);
-    toolbar->addWidget(openExpBtn_);
-    toolbar->addWidget(exportSvgBtn_);
-    toolbar->addWidget(exportPngBtn_);
     leftLayout->addLayout(toolbar);
+
+    auto *secondaryToolbar = new QHBoxLayout;
+    secondaryToolbar->setSpacing(8);
+    secondaryToolbar->addWidget(optimizeCheck_);
+    secondaryToolbar->addWidget(saveExpBtn_);
+    secondaryToolbar->addWidget(openExpBtn_);
+    secondaryToolbar->addWidget(exportSvgBtn_);
+    secondaryToolbar->addWidget(exportPngBtn_);
+    secondaryToolbar->addStretch(1);
+    leftLayout->addLayout(secondaryToolbar);
 
     // Status label
     compileStatusLabel_ = new QLabel(QStringLiteral("READY"));
@@ -1696,7 +1706,7 @@ private:
 
     comparisonListTable_ = new QTableWidget(0, 7);
     comparisonListTable_->setHorizontalHeaderLabels({
-        QStringLiteral("ID / Title"),
+        QStringLiteral("Title / File Identity"),
         QStringLiteral("Species"),
         QStringLiteral("Qubits"),
         QStringLiteral("Instructions"),
@@ -1714,6 +1724,7 @@ private:
     comparisonListTable_->verticalHeader()->hide();
     comparisonListTable_->setEditTriggers(QAbstractItemView::NoEditTriggers);
     comparisonListTable_->setSelectionBehavior(QAbstractItemView::SelectRows);
+    comparisonListTable_->setSelectionMode(QAbstractItemView::ExtendedSelection);
     comparisonListTable_->setFixedHeight(140);
     ctrlLayout->addWidget(comparisonListTable_);
 
@@ -1728,6 +1739,7 @@ private:
     comparisonSummaryLabel_->setStyleSheet(QStringLiteral(
         "font-family:monospace;font-size:11px;color:#38bdf8;padding:4px 8px;background:#0f172a;border:1px solid #1e293b;border-radius:2px"));
     diffLayout->addWidget(comparisonSummaryLabel_);
+    comparisonSummaryLabel_->setWordWrap(true);
 
     comparisonDeltaTable_ = new QTableWidget(0, 6);
     comparisonDeltaTable_->setHorizontalHeaderLabels({
@@ -1760,6 +1772,8 @@ private:
       comparisonBundles_.clear();
       comparisonListTable_->setRowCount(0);
       comparisonDeltaTable_->setRowCount(0);
+      comparisonDeltaTable_->horizontalHeaderItem(1)->setText(QStringLiteral("Experiment A"));
+      comparisonDeltaTable_->horizontalHeaderItem(2)->setText(QStringLiteral("Experiment B"));
       comparisonSummaryLabel_->setText(QStringLiteral("Comparison list cleared. Add .qcomp bundles to compare."));
     });
 
@@ -2142,25 +2156,66 @@ private:
     }
   }
 
+  QString comparisonEntryIdentity(const ComparisonEntry &entry) const {
+    if (!entry.bundle.id.empty()) {
+      const auto duplicateIds = std::count_if(
+          comparisonBundles_.begin(), comparisonBundles_.end(),
+          [&entry](const ComparisonEntry &candidate) {
+            return candidate.bundle.id == entry.bundle.id;
+          });
+      if (duplicateIds == 1) {
+        return QStringLiteral("bundle %1").arg(QString::fromStdString(entry.bundle.id));
+      }
+    }
+    return entry.fileIdentity;
+  }
+
+  QString comparisonEntryLabel(const ComparisonEntry &entry) const {
+    const QString title = entry.bundle.title.empty()
+        ? QFileInfo(entry.fileIdentity).fileName()
+        : QString::fromStdString(entry.bundle.title);
+    return QStringLiteral("%1 — %2").arg(title, comparisonEntryIdentity(entry));
+  }
+
   void addExperimentToComparison(const QString &path, const std::optional<ExperimentBundle> &preloaded = std::nullopt) {
     try {
-      ExperimentBundle b = preloaded.has_value() ? *preloaded : loadExperimentBundle(path.toStdString());
-      comparisonBundles_.push_back(b);
+      ExperimentBundle bundle = preloaded.has_value()
+          ? *preloaded : loadExperimentBundle(path.toStdString());
+      const QFileInfo fileInfo(path);
+      QString fileIdentity = fileInfo.canonicalFilePath();
+      if (fileIdentity.isEmpty()) fileIdentity = fileInfo.absoluteFilePath();
+      comparisonBundles_.push_back({std::move(bundle), fileIdentity});
 
       const int row = comparisonListTable_->rowCount();
       comparisonListTable_->insertRow(row);
 
-      const QString title = b.title.empty() ? QFileInfo(path).fileName() : QString::fromStdString(b.title);
-      comparisonListTable_->setItem(row, 0, new QTableWidgetItem(title));
-      comparisonListTable_->setItem(row, 1, new QTableWidgetItem(b.hasChemistry ? QString::fromStdString(b.formula) : QStringLiteral("Circuit")));
-      comparisonListTable_->setItem(row, 2, new QTableWidgetItem(QString::number(b.qubitCount)));
-      comparisonListTable_->setItem(row, 3, new QTableWidgetItem(QString::number(b.instructions.size())));
-      const QString geo = b.hasChemistry ? QStringLiteral("%1 %2").arg(b.distance, 0, 'f', 3).arg(QString::fromStdString(b.distanceUnits)) : QStringLiteral("—");
+      const ComparisonEntry &entry = comparisonBundles_.back();
+      auto *identityItem = new QTableWidgetItem(comparisonEntryLabel(entry));
+      identityItem->setToolTip(QStringLiteral("Bundle file: %1").arg(entry.fileIdentity));
+      comparisonListTable_->setItem(row, 0, identityItem);
+      comparisonListTable_->setItem(row, 1, new QTableWidgetItem(
+          entry.bundle.hasChemistry ? QString::fromStdString(entry.bundle.formula) : QStringLiteral("Circuit")));
+      comparisonListTable_->setItem(row, 2, new QTableWidgetItem(QString::number(entry.bundle.qubitCount)));
+      comparisonListTable_->setItem(row, 3, new QTableWidgetItem(QString::number(entry.bundle.instructions.size())));
+      const QString geo = entry.bundle.hasChemistry
+          ? QStringLiteral("%1 %2").arg(entry.bundle.distance, 0, 'f', 3)
+                .arg(QString::fromStdString(entry.bundle.distanceUnits))
+          : QStringLiteral("—");
       comparisonListTable_->setItem(row, 4, new QTableWidgetItem(geo));
-      const QString eStr = b.hasChemistry ? QString::number(b.totalEnergy, 'f', 6) : QStringLiteral("—");
+      const QString eStr = entry.bundle.hasChemistry
+          ? QString::number(entry.bundle.totalEnergy, 'f', 6) : QStringLiteral("—");
       comparisonListTable_->setItem(row, 5, new QTableWidgetItem(eStr));
-      const QString evStr = b.hasChemistry ? QString::number(b.energyEvaluations) : QStringLiteral("—");
+      const QString evStr = entry.bundle.hasChemistry
+          ? QString::number(entry.bundle.energyEvaluations) : QStringLiteral("—");
       comparisonListTable_->setItem(row, 6, new QTableWidgetItem(evStr));
+
+      for (std::size_t i = 0; i < comparisonBundles_.size(); ++i) {
+        auto *identityItem = comparisonListTable_->item(static_cast<int>(i), 0);
+        if (!identityItem) continue;
+        const ComparisonEntry &loaded = comparisonBundles_[i];
+        identityItem->setText(comparisonEntryLabel(loaded));
+        identityItem->setToolTip(QStringLiteral("Bundle file: %1").arg(loaded.fileIdentity));
+      }
 
       if (comparisonBundles_.size() >= 2) {
         updateComparisonView();
@@ -2173,6 +2228,8 @@ private:
   void updateComparisonView() {
     if (comparisonBundles_.size() < 2) {
       comparisonDeltaTable_->setRowCount(0);
+      comparisonDeltaTable_->horizontalHeaderItem(1)->setText(QStringLiteral("Experiment A"));
+      comparisonDeltaTable_->horizontalHeaderItem(2)->setText(QStringLiteral("Experiment B"));
       comparisonSummaryLabel_->setText(QStringLiteral("Load at least two experiments to view delta comparisons."));
       return;
     }
@@ -2190,10 +2247,21 @@ private:
       return;
     }
 
-    const auto comp = compareExperiments(comparisonBundles_[static_cast<std::size_t>(idxA)],
-                                         comparisonBundles_[static_cast<std::size_t>(idxB)]);
+    const ComparisonEntry &entryA = comparisonBundles_[static_cast<std::size_t>(idxA)];
+    const ComparisonEntry &entryB = comparisonBundles_[static_cast<std::size_t>(idxB)];
+    const auto comp = compareExperiments(entryA.bundle, entryB.bundle);
+    const QString labelA = comparisonEntryLabel(entryA);
+    const QString labelB = comparisonEntryLabel(entryB);
 
-    comparisonSummaryLabel_->setText(QString::fromStdString(comp.summary));
+    comparisonSummaryLabel_->setText(
+        QStringLiteral("A: %1\nB: %2\n%3")
+            .arg(labelA, labelB, QString::fromStdString(comp.summary)));
+    comparisonDeltaTable_->horizontalHeaderItem(1)->setText(
+        QStringLiteral("A · %1").arg(labelA));
+    comparisonDeltaTable_->horizontalHeaderItem(2)->setText(
+        QStringLiteral("B · %1").arg(labelB));
+    comparisonDeltaTable_->horizontalHeaderItem(1)->setToolTip(entryA.fileIdentity);
+    comparisonDeltaTable_->horizontalHeaderItem(2)->setToolTip(entryB.fileIdentity);
     comparisonDeltaTable_->setRowCount(static_cast<int>(comp.items.size()));
 
     for (std::size_t i = 0; i < comp.items.size(); ++i) {
@@ -3861,6 +3929,31 @@ private:
       resize(width, height);
       if (mainTabs_) mainTabs_->setCurrentIndex(0);
       QApplication::processEvents();
+      const QSize actualSize = size();
+      const std::vector<QWidget *> toolbarControls{
+          exampleCombo_, compileBtn_, optimizeCheck_, saveExpBtn_, openExpBtn_,
+          exportSvgBtn_, exportPngBtn_};
+      QWidget *toolbarParent = toolbarControls.front()->parentWidget();
+      bool controlsUsable = toolbarParent != nullptr;
+      for (std::size_t i = 0; controlsUsable && i < toolbarControls.size(); ++i) {
+        const QWidget *control = toolbarControls[i];
+        controlsUsable = control && control->isVisible() &&
+            control->parentWidget() == toolbarParent &&
+            toolbarParent->rect().contains(control->geometry()) &&
+            control->width() > 0 && control->height() > 0;
+        for (std::size_t j = 0; controlsUsable && j < i; ++j) {
+          controlsUsable = !control->geometry().intersects(toolbarControls[j]->geometry());
+        }
+      }
+      if (actualSize != QSize(width, height) || !controlsUsable) {
+        std::cout << "QCOMPILE_LAB_WINDOW_GEOMETRY requested="
+                  << width << "x" << height << " actual="
+                  << actualSize.width() << "x" << actualSize.height()
+                  << " controlsUsable=" << controlsUsable << std::endl;
+        return false;
+      }
+      std::cout << "QCOMPILE_LAB_WINDOW_GEOMETRY actual="
+                << actualSize.width() << "x" << actualSize.height() << std::endl;
       followCircuitOperation(circuitSession_->currentStep());
       QApplication::processEvents();
       if (!activeOperationVisible(circuitSession_->currentStep())) return false;
@@ -3873,7 +3966,7 @@ private:
       return true;
     };
     if (!captureCircuitAt(1024, 680) || !captureCircuitAt(1440, 900)) {
-      finishSmokeTest(false, QStringLiteral("main circuit workbench clipping/active-operation check failed at a target window size"));
+      finishSmokeTest(false, QStringLiteral("main circuit workbench did not fit the requested target size or toolbar controls overlapped"));
       return;
     }
 
@@ -3944,17 +4037,71 @@ private:
       pesViewCombo_->setCurrentIndex(1); // H2 scan
     }
 
-    // 2b. Test Comparison Inspector Tab
     if (mainTabs_ && comparisonListTable_ && comparisonDeltaTable_) {
-      mainTabs_->setCurrentIndex(2);
-      addExperimentToComparison(smokeQcomp);
-      addExperimentToComparison(smokeQcomp);
-      if (comparisonListTable_->rowCount() < 2 || comparisonDeltaTable_->rowCount() == 0) {
-        finishSmokeTest(false, QStringLiteral("comparison inspector did not generate pairwise comparison rows"));
-        return;
-      }
-      QFile::remove(smokeQcomp);
-      mainTabs_->setCurrentIndex(1);
+
+    // Comparison identity regression: separate files share the same title and basename.
+    QTemporaryDir comparisonRoot;
+    const QString firstDirectory = comparisonRoot.filePath(QStringLiteral("first"));
+    const QString secondDirectory = comparisonRoot.filePath(QStringLiteral("second"));
+    if (!comparisonRoot.isValid() ||
+        !QDir().mkpath(firstDirectory) || !QDir().mkpath(secondDirectory)) {
+      finishSmokeTest(false, QStringLiteral("could not create comparison identity fixtures"));
+      return;
+    }
+    const QString firstPath = QDir(firstDirectory).filePath(QStringLiteral("run.qcomp"));
+    const QString secondPath = QDir(secondDirectory).filePath(QStringLiteral("run.qcomp"));
+    try {
+      ExperimentBundle firstBundle = loadExperimentBundle(smokeQcomp.toStdString());
+      ExperimentBundle secondBundle = firstBundle;
+      firstBundle.title = "Shared title";
+      secondBundle.title = "Shared title";
+      firstBundle.id = "copied-bundle-id";
+      secondBundle.id = "copied-bundle-id";
+      saveExperimentBundle(firstPath.toStdString(), firstBundle);
+      saveExperimentBundle(secondPath.toStdString(), secondBundle);
+    } catch (const std::exception &error) {
+      finishSmokeTest(false, QString::fromLocal8Bit(error.what()));
+      return;
+    }
+
+    comparisonBundles_.clear();
+    comparisonListTable_->setRowCount(0);
+    comparisonDeltaTable_->setRowCount(0);
+    comparisonDeltaTable_->horizontalHeaderItem(1)->setText(QStringLiteral("Experiment A"));
+    comparisonDeltaTable_->horizontalHeaderItem(2)->setText(QStringLiteral("Experiment B"));
+    addExperimentToComparison(firstPath);
+    addExperimentToComparison(secondPath);
+    const QString firstIdentity = QFileInfo(firstPath).canonicalFilePath();
+    const QString secondIdentity = QFileInfo(secondPath).canonicalFilePath();
+    if (comparisonListTable_->rowCount() != 2 ||
+        comparisonDeltaTable_->rowCount() == 0 ||
+        QFileInfo(firstPath).fileName() != QFileInfo(secondPath).fileName() ||
+        firstIdentity == secondIdentity ||
+        !comparisonListTable_->item(0, 0)->text().contains(QStringLiteral("Shared title")) ||
+        !comparisonListTable_->item(1, 0)->text().contains(QStringLiteral("Shared title")) ||
+        !comparisonListTable_->item(0, 0)->text().contains(firstIdentity) ||
+        !comparisonListTable_->item(1, 0)->text().contains(secondIdentity)) {
+      finishSmokeTest(false, QStringLiteral("same-title bundle files were not distinct in the comparison list"));
+      return;
+    }
+    auto *selection = comparisonListTable_->selectionModel();
+    selection->clearSelection();
+    selection->select(comparisonListTable_->model()->index(0, 0),
+                      QItemSelectionModel::Select | QItemSelectionModel::Rows);
+    selection->select(comparisonListTable_->model()->index(1, 0),
+                      QItemSelectionModel::Select | QItemSelectionModel::Rows);
+    const QString resultHeaderA = comparisonDeltaTable_->horizontalHeaderItem(1)->text();
+    const QString resultHeaderB = comparisonDeltaTable_->horizontalHeaderItem(2)->text();
+    if (selection->selectedRows().size() != 2 ||
+        !resultHeaderA.contains(firstIdentity) ||
+        !resultHeaderB.contains(secondIdentity) ||
+        !comparisonSummaryLabel_->text().contains(firstIdentity) ||
+        !comparisonSummaryLabel_->text().contains(secondIdentity)) {
+      finishSmokeTest(false, QStringLiteral("comparison selection did not carry distinct file identities into the A/B results"));
+      return;
+    }
+    QFile::remove(smokeQcomp);
+    mainTabs_->setCurrentIndex(1);
     }
     const double initialYaw = moleculeView_->yaw();
     const QPoint pressPosition(40, 40);
@@ -4163,7 +4310,7 @@ private:
   QTableWidget *comparisonListTable_ = nullptr;
   QTableWidget *comparisonDeltaTable_ = nullptr;
   QLabel *comparisonSummaryLabel_ = nullptr;
-  std::vector<ExperimentBundle> comparisonBundles_;
+  std::vector<ComparisonEntry> comparisonBundles_;
 };
 
 } // namespace

@@ -49,7 +49,7 @@ Source File (.txt)
 | **Compiler** | `include/compiler/` | `src/compiler/` | Lexer, AST parser, semantic checker, code generator, and DAG-based circuit optimizer |
 | **Simulator** | `include/simulator/` | `src/simulator/` | Statevector simulator, single/two-qubit gates, measurement, and Pauli expectations |
 | **Chemistry** | `include/chemistry/` | `src/chemistry/` | Qubit Hamiltonians, Jacobi eigensolver, H₂ VQE, HeH⁺ VQE, and benchmark catalog |
-| **GUI** | — | `src/gui/h2_lab.cpp` | Interactive Qt6 desktop workbench for H₂ potential energy surface inspection |
+| **GUI** | — | `src/gui/h2_lab.cpp` | Qt6 desktop workbench with Quantum Circuit Workbench, Molecular PES Laboratory, and Comparison Inspector |
 | **Apps** | — | `src/apps/` | Entry points: `qcompile`, `qcompile_h2`, `qcompile_heh`, `qcompile_benchmarks` |
 
 ---
