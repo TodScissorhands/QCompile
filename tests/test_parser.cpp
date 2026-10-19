@@ -235,8 +235,8 @@ void testParser() {
 
   // 4. Missing EOF token (truncated token stream) rejected with diagnostic
   std::vector<Token> truncatedTokens = {
-      {TokenType::KeywordQubit, "qubit", 1, 1},
-      {TokenType::Identifier, "q0", 1, 7}
+      {TokenType::KeywordQubit, "qubit", 1, 1, {}},
+      {TokenType::Identifier, "q0", 1, 7, {}}
   }; // lacks EndOfFile or Newline
   bool truncatedRejected = false;
   std::string truncatedError;
@@ -298,6 +298,22 @@ void testParser() {
   require(emptySem.qubitNames.empty(), "empty program has no declared qubits");
   std::vector<Instruction> emptyInstrs = generateInstructions(emptyValidProg, emptySem);
   require(emptyInstrs.empty(), "empty program generates zero instructions");
+  // A truncated token stream reports a structured insertion point after its last token.
+  auto missingEofTokens = Lexer("qubit q0").tokenize();
+  missingEofTokens.pop_back();
+  bool missingEofLocated = false;
+  try {
+    (void)Parser(std::move(missingEofTokens)).parse();
+  } catch (const compiler::SourceLocatedError &error) {
+    missingEofLocated = true;
+    require(error.span().isValid() && error.span().start.offset == 8 &&
+                error.span().end.offset == 8 &&
+                error.span().start.line == 1 &&
+                error.span().start.column == 9 &&
+                error.span().end.column == 9,
+            "missing EOF is located at the exact end of the last token");
+  }
+  require(missingEofLocated, "malformed token stream raises a located parser error");
 }
 
 } // namespace test

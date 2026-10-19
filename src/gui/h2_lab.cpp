@@ -1154,11 +1154,14 @@ private:
     leftLayout->addWidget(dslEditor_, 3);
 
     // Diagnostics Table
-    diagnosticsTable_ = new QTableWidget(0, 3);
-    diagnosticsTable_->setHorizontalHeaderLabels({QStringLiteral("Line"), QStringLiteral("Severity"), QStringLiteral("Diagnostic Message")});
+    diagnosticsTable_ = new QTableWidget(0, 4);
+    diagnosticsTable_->setHorizontalHeaderLabels({
+        QStringLiteral("Line"), QStringLiteral("Column"),
+        QStringLiteral("Severity"), QStringLiteral("Diagnostic Message")});
     diagnosticsTable_->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
     diagnosticsTable_->horizontalHeader()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
-    diagnosticsTable_->horizontalHeader()->setSectionResizeMode(2, QHeaderView::Stretch);
+    diagnosticsTable_->horizontalHeader()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
+    diagnosticsTable_->horizontalHeader()->setSectionResizeMode(3, QHeaderView::Stretch);
     diagnosticsTable_->verticalHeader()->hide();
     diagnosticsTable_->setEditTriggers(QAbstractItemView::NoEditTriggers);
     diagnosticsTable_->setSelectionBehavior(QAbstractItemView::SelectRows);
@@ -1294,16 +1297,8 @@ private:
     connect(&circuitPlayTimer_, &QTimer::timeout, [this] { circuitStepForward(); });
     connect(circuitStepSlider_, &QSlider::valueChanged, [this](int val) { circuitSeek(val); });
     connect(viewOptimizedRadio_, &QRadioButton::toggled, [this] { refreshCircuitFromCompilation(); });
-    connect(diagnosticsTable_, &QTableWidget::cellClicked, [this](int row, int) {
-      if (row >= 0 && row < static_cast<int>(lastCompilation_.diagnostics.size())) {
-        int line = lastCompilation_.diagnostics[row].line;
-        if (line > 0) {
-          QTextCursor cursor(dslEditor_->document()->findBlockByLineNumber(line - 1));
-          dslEditor_->setTextCursor(cursor);
-          dslEditor_->setFocus();
-        }
-      }
-    });
+    connect(diagnosticsTable_, &QTableWidget::cellClicked,
+            [this](int row, int) { navigateToDiagnosticRow(row); });
     connect(saveExpBtn_, &QPushButton::clicked, [this] { saveCurrentExperiment(); });
     connect(openExpBtn_, &QPushButton::clicked, [this] { openExperimentFile(); });
     connect(exportSvgBtn_, &QPushButton::clicked, [this] { exportCircuitToSvgFile(); });
@@ -2492,6 +2487,50 @@ private:
     compileDsl();
   }
 
+  void navigateToDiagnostic(const compiler::Diagnostic &diagnostic) {
+    if (!dslEditor_ || !diagnostic.sourceSpan.isValid()) return;
+
+    const std::string source = dslEditor_->toPlainText().toStdString();
+    const SourceSpan &span = diagnostic.sourceSpan;
+    if (span.start.offset > source.size() ||
+        span.end.offset > source.size() ||
+        span.start.offset > static_cast<std::size_t>(
+                                std::numeric_limits<qsizetype>::max()) ||
+        span.end.offset > static_cast<std::size_t>(
+                              std::numeric_limits<qsizetype>::max())) {
+      return;
+    }
+
+    const auto documentPosition = [&source](std::size_t byteOffset) {
+      return QString::fromUtf8(
+                 source.data(), static_cast<qsizetype>(byteOffset))
+          .size();
+    };
+    const qsizetype start = documentPosition(span.start.offset);
+    const qsizetype end = documentPosition(span.end.offset);
+    const int maximumPosition =
+        std::max(0, dslEditor_->document()->characterCount() - 1);
+    if (start < 0 || end < start || end > maximumPosition ||
+        end > std::numeric_limits<int>::max()) {
+      return;
+    }
+
+    QTextCursor cursor(dslEditor_->document());
+    cursor.setPosition(static_cast<int>(start));
+    cursor.setPosition(static_cast<int>(end), QTextCursor::KeepAnchor);
+    dslEditor_->setTextCursor(cursor);
+    dslEditor_->setFocus();
+  }
+
+  void navigateToDiagnosticRow(int row) {
+    if (dslDebounceTimer_.isActive() || row < 0 ||
+        row >= static_cast<int>(lastCompilation_.diagnostics.size())) {
+      return;
+    }
+    navigateToDiagnostic(
+        lastCompilation_.diagnostics[static_cast<std::size_t>(row)]);
+  }
+
   void compileDsl() {
     if (!dslEditor_) return;
     const std::string source = dslEditor_->toPlainText().toStdString();
@@ -2518,11 +2557,17 @@ private:
       compileStatusLabel_->setStyleSheet(QStringLiteral(
           "font-family:monospace;font-size:11px;font-weight:700;color:#f43f5e;padding:4px 8px;background:#1e1014;border:1px solid #4c0519;border-radius:2px"));
 
-      diagnosticsTable_->setRowCount(static_cast<int>(lastCompilation_.diagnostics.size()));
+      diagnosticsTable_->setRowCount(
+          static_cast<int>(lastCompilation_.diagnostics.size()));
       for (std::size_t i = 0; i < lastCompilation_.diagnostics.size(); ++i) {
         const auto &diag = lastCompilation_.diagnostics[i];
-        auto *lineItem = new QTableWidgetItem(diag.line > 0 ? QString::number(diag.line) : QStringLiteral("—"));
+        auto *lineItem = new QTableWidgetItem(
+            diag.line > 0 ? QString::number(diag.line) : QStringLiteral("—"));
+        auto *columnItem = new QTableWidgetItem(
+            diag.column > 0 ? QString::number(diag.column)
+                            : QStringLiteral("—"));
         lineItem->setTextAlignment(Qt::AlignCenter);
+        columnItem->setTextAlignment(Qt::AlignCenter);
         auto *sevItem = new QTableWidgetItem(QStringLiteral("Error"));
         sevItem->setTextAlignment(Qt::AlignCenter);
         sevItem->setForeground(QColor(244, 63, 94));
@@ -2530,8 +2575,9 @@ private:
         msgItem->setForeground(QColor(254, 205, 211));
 
         diagnosticsTable_->setItem(static_cast<int>(i), 0, lineItem);
-        diagnosticsTable_->setItem(static_cast<int>(i), 1, sevItem);
-        diagnosticsTable_->setItem(static_cast<int>(i), 2, msgItem);
+        diagnosticsTable_->setItem(static_cast<int>(i), 1, columnItem);
+        diagnosticsTable_->setItem(static_cast<int>(i), 2, sevItem);
+        diagnosticsTable_->setItem(static_cast<int>(i), 3, msgItem);
       }
       diagnosticsTable_->show();
 
@@ -3166,13 +3212,132 @@ private:
       finishSmokeTest(false, QStringLiteral("Bell measurement setup for compilation-failure check did not complete"));
       return;
     }
-    compileSmokeSource(QStringLiteral("qubit q0\nH missing\n"));
+    compileSmokeSource(QStringLiteral(
+        "qubit q0\nmeasure q0, q0\nH missing\n"));
     if (lastCompilation_.success || circuitSession_ ||
         circuitView_->qubitCount() != 0 || circuitView_->instructionCount() != 0 ||
         !circuitMeasurementBanner_->isHidden() || circuitStateTable_->rowCount() != 0 ||
         diagnosticsTable_->isHidden() ||
         !compileStatusLabel_->text().contains(QStringLiteral("COMPILATION FAILED"))) {
       finishSmokeTest(false, QStringLiteral("compilation failure did not preserve diagnostics while clearing old run output"));
+      return;
+    }
+
+    const auto clickDiagnosticRow = [this](int row) {
+      QWidget *viewport = diagnosticsTable_->viewport();
+      const QRect cell = diagnosticsTable_->visualRect(
+          diagnosticsTable_->model()->index(row, 0));
+      if (!cell.isValid()) return false;
+      const QPointF localPosition(cell.center());
+      const QPointF globalPosition(viewport->mapToGlobal(cell.center()));
+      QMouseEvent press(QEvent::MouseButtonPress, localPosition, globalPosition,
+                        Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+      QApplication::sendEvent(viewport, &press);
+      QMouseEvent release(QEvent::MouseButtonRelease, localPosition, globalPosition,
+                          Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+      QApplication::sendEvent(viewport, &release);
+      return true;
+    };
+    if (lastCompilation_.diagnostics.size() != 2 ||
+        diagnosticsTable_->columnCount() != 4 ||
+        !diagnosticsTable_->item(0, 0) ||
+        !diagnosticsTable_->item(0, 1) ||
+        diagnosticsTable_->item(0, 0)->text() != QStringLiteral("2") ||
+        diagnosticsTable_->item(0, 1)->text() != QStringLiteral("13") ||
+        !clickDiagnosticRow(0)) {
+      finishSmokeTest(false, QStringLiteral("diagnostic table did not expose precise source coordinates"));
+      return;
+    }
+    const QTextCursor duplicateCursor = dslEditor_->textCursor();
+    if (duplicateCursor.selectedText() != QStringLiteral("q0") ||
+        duplicateCursor.selectionStart() != 21 ||
+        duplicateCursor.selectionEnd() != 23 ||
+        lastCompilation_.diagnostics.size() != 2) {
+      finishSmokeTest(false, QStringLiteral("clicking a diagnostic row did not select its exact duplicate token"));
+      return;
+    }
+    if (!clickDiagnosticRow(1) ||
+        dslEditor_->textCursor().selectedText() != QStringLiteral("missing") ||
+        dslEditor_->textCursor().selectionStart() != 26) {
+      finishSmokeTest(false, QStringLiteral("clicking a later diagnostic did not navigate to its source span"));
+      return;
+    }
+    compileSmokeSource(QStringLiteral("#π\nH q0 @\n"));
+    if (lastCompilation_.diagnostics.size() != 1 ||
+        lastCompilation_.diagnostics[0].line != 2 ||
+        lastCompilation_.diagnostics[0].column != 6 ||
+        lastCompilation_.diagnostics[0].sourceSpan.start.offset != 9 ||
+        lastCompilation_.diagnostics[0].sourceSpan.end.offset != 10 ||
+        !diagnosticsTable_->item(0, 0) ||
+        diagnosticsTable_->item(0, 0)->text() != QStringLiteral("2") ||
+        diagnosticsTable_->item(0, 1)->text() != QStringLiteral("6") ||
+        !clickDiagnosticRow(0) ||
+        dslEditor_->textCursor().selectedText() != QStringLiteral("@") ||
+        dslEditor_->textCursor().selectionStart() != 8 ||
+        dslEditor_->textCursor().selectionEnd() != 9) {
+      finishSmokeTest(false, QStringLiteral("UTF-8 byte offsets did not map to the correct Qt source character"));
+      return;
+    }
+    const QString supplementaryCharacter =
+        QString::fromUtf8("\xF0\x9F\x98\x80");
+    compileSmokeSource(QStringLiteral("qubit q0\nH q0 ") +
+                       supplementaryCharacter + QStringLiteral("\n"));
+    if (lastCompilation_.diagnostics.size() != 1 ||
+        lastCompilation_.diagnostics[0].line != 2 ||
+        lastCompilation_.diagnostics[0].column != 6 ||
+        lastCompilation_.diagnostics[0].sourceSpan.start.offset != 14 ||
+        lastCompilation_.diagnostics[0].sourceSpan.end.offset != 18 ||
+        lastCompilation_.diagnostics[0].sourceSpan.end.column != 10 ||
+        !clickDiagnosticRow(0) ||
+        dslEditor_->textCursor().selectedText() != supplementaryCharacter ||
+        dslEditor_->textCursor().selectionStart() != 14 ||
+        dslEditor_->textCursor().selectionEnd() != 16) {
+      finishSmokeTest(false, QStringLiteral("supplementary UTF-8 diagnostic did not select the complete source character"));
+      return;
+    }
+
+
+    compileSmokeSource(QStringLiteral("qubit q0\nH"));
+    if (lastCompilation_.diagnostics.size() != 1 ||
+        !lastCompilation_.diagnostics[0].sourceSpan.isValid() ||
+        lastCompilation_.diagnostics[0].sourceSpan.start.offset != 10 ||
+        lastCompilation_.diagnostics[0].sourceSpan.end.offset != 10 ||
+        !clickDiagnosticRow(0) ||
+        dslEditor_->textCursor().hasSelection() ||
+        dslEditor_->textCursor().position() != 10) {
+      finishSmokeTest(false, QStringLiteral("EOF diagnostic did not navigate to its zero-length insertion point"));
+      return;
+    }
+
+    dslEditor_->setPlainText(QStringLiteral("qubit q0\nX q0\n"));
+    const int cursorBeforeStaleClick = dslEditor_->textCursor().position();
+    if (!dslDebounceTimer_.isActive() || !clickDiagnosticRow(0) ||
+        dslEditor_->textCursor().position() != cursorBeforeStaleClick ||
+        dslEditor_->textCursor().hasSelection()) {
+      finishSmokeTest(false, QStringLiteral("a pending source edit allowed navigation using stale diagnostic offsets"));
+      return;
+    }
+    dslDebounceTimer_.stop();
+    compileSmokeSource(QStringLiteral("qubit q0\nH"));
+
+    if (lastCompilation_.diagnostics.size() != 1 ||
+        !lastCompilation_.diagnostics[0].sourceSpan.isValid() ||
+        lastCompilation_.diagnostics[0].sourceSpan.start.offset != 10) {
+      finishSmokeTest(false, QStringLiteral("EOF diagnostic setup failed after stale-location check"));
+      return;
+    }
+
+    auto &unlocatedDiagnostic = lastCompilation_.diagnostics[0];
+    unlocatedDiagnostic.line = 0;
+    unlocatedDiagnostic.column = 0;
+    unlocatedDiagnostic.sourceSpan = {};
+    diagnosticsTable_->item(0, 0)->setText(QStringLiteral("—"));
+    diagnosticsTable_->item(0, 1)->setText(QStringLiteral("—"));
+    const int cursorBeforeUnlocatedClick = dslEditor_->textCursor().position();
+    if (!clickDiagnosticRow(0) ||
+        dslEditor_->textCursor().position() != cursorBeforeUnlocatedClick ||
+        dslEditor_->textCursor().hasSelection()) {
+      finishSmokeTest(false, QStringLiteral("unlocated diagnostic moved the editor to an arbitrary source position"));
       return;
     }
 

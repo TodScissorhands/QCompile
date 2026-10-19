@@ -164,24 +164,31 @@ This header defines the structures shared between parsing, semantic checking, co
 - `text` stores the literal number text or identifier text for leaf nodes.
 - `operation` stores an operator character such as `+`, `*`, or `-` for operation nodes.
 - `children` stores nested expressions. A binary node has two children in left-then-right order; a unary-minus node has one child. Using a vector permits a recursive tree without smart pointers.
+- `sourceSpan` stores the half-open source range of this expression; `operatorSpan` stores the operator token when this node represents an operation.
 
 #### `struct Statement`
 
 One struct is reused for all statement kinds; fields relevant to the selected `type` are filled by the parser.
 
 - `type` identifies the statement category.
-- `line` stores the source line used by semantic error messages.
-- `names` holds qubit names for `QubitDeclaration`.
-- `variableName` holds the left side of a `let` declaration.
+- `line` stores the one-based source line used by semantic error messages.
+- `names` holds qubit names for `QubitDeclaration`; `nameSpans` holds the matching identifier ranges.
+- `variableName` holds the left side of a `let` declaration; `variableNameSpan` locates that identifier.
 - `variableExpression` holds the parsed right side of a `let` declaration.
-- `gate` holds a gate name such as `H`, `CNOT`, or the text `measure`.
-- `qubits` holds gate or measurement operand names.
+- `gate` holds a gate name such as `H`, `CNOT`, or the text `measure`; `gateSpan` locates the operation name.
+- `qubits` holds gate or measurement operand names; `qubitSpans` holds the matching identifier ranges.
 - `hasParameter` states whether the operation had parentheses containing an expression.
 - `parameter` holds that parsed parameter expression when `hasParameter` is true.
+- `sourceSpan` covers the complete parsed statement.
 
 #### `struct Program`
 
 - `statements` holds every parsed statement in source order. Later stages walk this vector from beginning to end, which is important because declarations must come before uses.
+
+
+### `include/compiler/source_location.h`
+
+`compiler::SourcePosition` stores a zero-based UTF-8 byte `offset`, a one-based `line` number, and a one-based UTF-8 byte `column`. `compiler::SourceSpan` stores a half-open `[start, end)` range; an insertion point, including EOF, has equal start and end positions. `SourceSpan::isValid()` distinguishes located positions from the default invalid span. A line or column of zero is unlocated, so a global diagnostic is not confused with a location at line 1, column 1. `compiler::SourceLocatedError` carries a span alongside the existing human-readable error message. Tokens assembled by external callers without a valid `sourceSpan` remain unlocated because their absolute source-byte offset is unavailable.
 
 ### `include/compiler/lexer.h`
 
@@ -193,8 +200,8 @@ One struct is reused for all statement kinds; fields relevant to the selected `t
 
 - `type` is the category from `TokenType`.
 - `text` is the original spelling, for example `"CNOT"`, `"0.5"`, or `"+"`.
-- `line` stores the one-based input line number.
-- `column` stores the one-based input column. The current displayed error messages use the line number, but the lexer still records the column.
+- `line` and `column` store the one-based source position.
+- `sourceSpan` stores the token's half-open UTF-8 byte range.
 
 #### `class Lexer`
 
@@ -210,16 +217,16 @@ One struct is reused for all statement kinds; fields relevant to the selected `t
 
 #### `class Parser`
 
-- `Parser(const std::vector<Token> &tokenList)` stores a reference to the lexer output and begins at token index zero.
+- `Parser(std::vector<Token> tokenList)` owns the token vector and begins at token index zero.
 - `Program parse()` parses the complete token list into a `Program`.
-- `tokens` is the private reference to the token vector; it is not copied.
+- `tokens` is the owned token vector.
 - `current` is the private index of the next token to inspect.
 - `peek()` returns the current token without advancing.
 - `advance()` returns the current token and increments `current`.
 - `check(TokenType type)` reports whether the current token has a requested type.
 - `match(TokenType type)` consumes the current token only when it has that type.
 - `skipNewlines()` consumes one or more newline tokens so blank lines are ignored.
-- `expect(TokenType type)` requires a token type and throws a line-numbered parser error when it is absent.
+- `expect(TokenType type)` requires a token type and throws a source-located parser error when it is absent.
 - `parseNameList()` parses one identifier followed by zero or more comma-and-identifier pairs.
 - `parseExpression()` parses addition and subtraction expressions.
 - `parseTerm()` parses multiplication and division expressions.
@@ -237,10 +244,13 @@ One struct is reused for all statement kinds; fields relevant to the selected `t
 - `variableNames` stores valid variable names in declaration order.
 - `variableValues` stores the corresponding evaluated `double` values at the same indices as `variableNames`.
 - `parameterValues` stores evaluated parameter values aligned with `Program::statements`; non-parameter statements keep `0.0`.
+- `errorSpans` is index-aligned with `errors`; an invalid span marks an unlocated diagnostic.
 
 #### `checkSemantics`
 
-- `SemanticResult checkSemantics(const Program &program)` walks the AST in order, collects all semantic errors, evaluates valid variables and parameters, and returns the result.
+- `SemanticResult checkSemantics(const Program &program)` walks the AST in order, collects all semantic errors and their spans, evaluates valid variables and parameters, and returns the result.
+
+`Diagnostic` in `include/compiler/compiler_facade.h` carries the same one-based line and column and a structured `SourceSpan`. Global or otherwise unlocated diagnostics retain line and column zero and an invalid span.
 
 ### `include/compiler/code_generator.h`
 
@@ -283,19 +293,19 @@ One struct is reused for all statement kinds; fields relevant to the selected `t
 
 `Lexer::Lexer` copies the supplied source text into the object's `source` field.
 
-`Lexer::tokenize` is the main character scanner. It maintains `position`, `line`, and `column`. It skips spaces, tabs, and carriage returns; emits a `Newline` token for `\n`; emits individual tokens for punctuation and operators; scans a run of digits with an optional decimal point as a `Number`; and scans valid word characters as a word before passing it to `classifyWord`. An unrecognized character throws a line-numbered lexer error. At the end, it appends an `EndOfFile` token so the parser has an explicit stopping marker.
+`Lexer::tokenize` is the main character scanner. It maintains the byte offset, line, and UTF-8 byte column. It skips spaces, tabs, and carriage returns; emits a `Newline` token for `\n`; emits individual tokens for punctuation and operators; scans a run of digits with an optional decimal point as a `Number`; and scans valid word characters as a word before passing it to `classifyWord`. An unrecognized character throws a `SourceLocatedError` for its byte range. Tokens, including EOF, carry half-open spans.
 
 `tokenTypeName` is a `switch` that maps each `TokenType` enum member to the readable names shown in the driver output.
 
 ### `src/compiler/parser.cpp`
 
-`Parser::Parser` stores a reference to the complete token list and initializes `current` to zero.
+`Parser::Parser` owns the token vector and initializes `current` to zero.
 
 `peek` returns `tokens[current]` without changing the parser position. `advance` returns that token and then increments `current`. `check` compares `peek().type` to a requested type. `match` combines checking and consuming: it returns false without moving when the token does not match, and consumes one token when it does.
 
 `skipNewlines` repeatedly calls `match(Newline)`. This is why blank lines do not become statements.
 
-`expect` requires a particular token type. On failure it throws `Error: unexpected token '...' at line ...`; on success it calls `advance`.
+`expect` requires a particular token type. On failure it throws a `SourceLocatedError` that selects the unexpected token; for a missing token before newline or EOF, it carries a zero-length insertion point.
 
 `parseNameList` first requires an identifier, then saves `tokens[current - 1].text`. The `current - 1` expression is intentional: `expect` already advanced past the identifier, so the immediately previous token is the identifier that was just accepted. The function then repeats the same process for each comma followed by an identifier.
 
@@ -303,9 +313,9 @@ One struct is reused for all statement kinds; fields relevant to the selected `t
 
 `parseTerm` has the same shape but handles `*` and `/`. Because `parseExpression` asks `parseTerm` for both sides of addition and subtraction, multiplication and division are fully grouped first.
 
-`parseFactor` handles expression leaves and grouping. A number becomes a `NumberLiteral`; an identifier becomes an `Identifier`; a leading minus becomes a one-child `UnaryOperation`; and parentheses recursively call `parseExpression` before requiring `)`. If none of those forms match, it throws a parser error.
+`parseFactor` handles expression leaves and grouping. A number becomes a `NumberLiteral`; an identifier becomes an `Identifier`; a leading minus becomes a one-child `UnaryOperation`; and parentheses recursively call `parseExpression` before requiring `)`. These nodes retain token/expression/operator spans. An unexpected token selects its range; EOF and newline failures select insertion points.
 
-`parseStatement` selects a statement by its first token. For `qubit`, it creates a `QubitDeclaration`, saves the keyword's line number, and calls `parseNameList`. For `let`, it creates a `VariableDeclaration`, requires an identifier and `=`, and parses the right side with `parseExpression`. For a recognized gate or `measure`, it records the operation line and name, optionally parses a parenthesized parameter expression, then parses the operand list. The line is stored in every statement because semantic errors need the original source location.
+`parseStatement` selects a statement by its first token. For `qubit`, it creates a `QubitDeclaration` and calls `parseNameList`; for `let`, it creates a `VariableDeclaration`, requires an identifier and `=`, and parses the right side with `parseExpression`. For a recognized gate or `measure`, it records the operation, optionally parses a parenthesized parameter expression, then parses the operand list. It retains spans for names, gate operations, expressions, and the complete statement so semantic checking can select the relevant construct.
 
 `parse` skips initial blank lines, repeatedly parses one statement, requires a newline unless EOF follows immediately, and then skips extra blank lines. Its EOF exception permits an input file without a final newline.
 
@@ -313,7 +323,7 @@ One struct is reused for all statement kinds; fields relevant to the selected `t
 
 The anonymous-namespace helper `findNameIndex` searches a vector of names with a plain loop and returns its index or `-1`. Both qubit and variable lookup use this simple approach, which keeps the symbol tables beginner-readable.
 
-The anonymous-namespace helper `evaluateExpression` recursively evaluates an `Expression` into a `double`. Number nodes use `std::stod`. Identifier nodes look up the name in the already-built variable vectors; if absent, the function adds `Error: undefined variable 'name' used at line N`. Unary nodes evaluate their one child and negate it. Binary nodes evaluate both children first, allowing errors from both sides to be collected, then apply the stored operator. Division by zero is reported as a semantic error. This stage intentionally evaluates expressions to ordinary doubles rather than keeping symbolic values because the simulator needs a concrete numeric angle for `RZ`.
+The anonymous-namespace helper `evaluateExpression` recursively evaluates an `Expression` into a `double`. Number nodes use `std::stod`. Identifier nodes look up the name in the already-built variable vectors; if absent, the function adds `Error: undefined variable 'name' used at line N` at the identifier span. Unary nodes evaluate their one child and negate it. Binary nodes evaluate both children first, allowing errors from both sides to be collected, then apply the stored operator. Division by zero and non-finite arithmetic results select the responsible operator. This stage intentionally evaluates expressions to ordinary doubles rather than keeping symbolic values because the simulator needs a concrete numeric angle for `RZ`.
 
 `checkSemantics` creates a `SemanticResult` and sizes `parameterValues` to match the statement vector. It walks statements in source order. For qubit declarations, it rejects duplicate names and otherwise appends names to `qubitNames`. For variable declarations, it rejects duplicate variable names, evaluates the declaration using only variables already stored, and adds a valid new name/value pair afterward. This ordering enforces the rule that a variable cannot be used before its `let` declaration.
 
@@ -489,9 +499,11 @@ Each calculation creates a private `QTemporaryDir`, invokes the existing offline
 
 `h2TrialInstructions(parameter)` is the single gate-list source used by both H₂ energy evaluation and the circuit panel. Playback selects a gate prefix; the inspector constructs a fresh existing `Simulator`, executes that real prefix, and reads its actual `stateVector()`. It shows computational basis labels in `q1q0` order, amplitudes, probabilities `|amplitude|²`, and norm. This does not change sampling-only, non-collapsing DSL measurement semantics.
 
+The DSL diagnostics table displays one-based line and UTF-8 byte column values. Selecting a located row navigates to its half-open source range; an EOF diagnostic moves the cursor to its zero-length insertion point. Global diagnostics display `—` for both coordinates and do not move the editor cursor. Pending edits suppress row navigation until the debounced compile completes, preventing use of stale offsets. The compiler API retains the structured span separately from the existing diagnostic message. Lexing and parsing stop at their first error; semantic checking can report multiple errors.
+
 The five-point sweep uses fresh generator/solver runs at 0.735, 0.900, 1.100, 1.250, and 1.400 Å. The plot displays only actual calculated total-energy points and corresponding physical-sector exact-reference points; it does not draw an interpolated curve. The guided prediction compares the two endpoint totals and identifies the minimum only among the sweep’s sampled geometries. The one-parameter ansatz is not claimed to remain accurate throughout dissociation.
 
-`./qcompile_lab --smoke-test` exercises camera rotation/zoom, bond preview updates, circuit stepping and deterministic measurement replay, bounded state inspection, simulator-initialization cleanup, injected playback resource-failure handling, two individual geometry runs, and the five-point sweep, then saves a screenshot to `/tmp/qcompile-lab-smoke.png`, replacing any existing file at that path. Optional executable overrides are `QCOMPILE_LAB_PYTHON`, `QCOMPILE_LAB_GENERATOR`, and `QCOMPILE_LAB_BENCHMARKS`. The app adds no chemistry-package runtime dependency, web frontend, or support for molecules other than H₂.
+`./qcompile_lab --smoke-test` exercises camera rotation/zoom, bond preview updates, circuit stepping and deterministic measurement replay, precise compiler-diagnostic display and row-click navigation (including UTF-8 offsets, EOF insertion points, unlocated rows, and edits pending recompilation), bounded state inspection, simulator-initialization cleanup, injected playback resource-failure handling, two individual geometry runs, and the five-point sweep, then saves a screenshot to `/tmp/qcompile-lab-smoke.png`, replacing any existing file at that path. Optional executable overrides are `QCOMPILE_LAB_PYTHON`, `QCOMPILE_LAB_GENERATOR`, and `QCOMPILE_LAB_BENCHMARKS`. The app adds no chemistry-package runtime dependency, web frontend, or support for molecules other than H₂.
 
 Experiment bundles use the existing `QCOMPILE-EXPERIMENT-1` JSON schema and the simulator's 24-qubit supported limit. Saving validates the schema identifier, qubit count and indices, state-vector dimensions, normalized state/norm/probability consistency, finite persisted values, unique valid measurement steps and outcomes, and step indices before writing a temporary file; an invalid save does not replace an existing destination. Opening restores the source and optimizer setting, recompiles the source, then replays the selected step with the deterministic simulator. The replayed state and recorded measurements must match any saved snapshots before the open is reported successful. A compilation, initialization, or replay failure leaves the loaded source/diagnostics visible, clears unrelated run output, and does not display `OPENED`.
 

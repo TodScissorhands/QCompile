@@ -32,7 +32,8 @@ private:
 
   void expect(TokenType type);
 
-  std::vector<std::string> parseNameList();
+  std::vector<std::string> parseNameList(
+      std::vector<SourceSpan> *nameSpans = nullptr);
 
   Expression parseExpression();
 

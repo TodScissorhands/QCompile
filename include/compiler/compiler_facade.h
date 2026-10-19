@@ -21,8 +21,9 @@ enum class DiagnosticSeverity {
 struct Diagnostic {
   DiagnosticSeverity severity = DiagnosticSeverity::Error;
   std::string message;
-  int line = 0;   // 1-based source line; 0 if unlocated/global
-  int column = 0; // 1-based source column; 0 if unlocated
+  int line = 0;   // 1-based; 0 if unlocated/global
+  int column = 0; // 1-based UTF-8 byte column; 0 if unlocated/global
+  SourceSpan sourceSpan; // Half-open, with a zero-length insertion point allowed
 };
 
 struct CompilerOptions {

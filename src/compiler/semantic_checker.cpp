@@ -2,7 +2,26 @@
 
 #include <cmath>
 #include <stdexcept>
+#include <utility>
+
 namespace {
+void appendError(std::vector<std::string> &errors,
+                 std::vector<SourceSpan> &spans, std::string message,
+                 SourceSpan span) {
+  errors.push_back(std::move(message));
+  spans.push_back(span.isValid() ? span : SourceSpan{});
+}
+
+SourceSpan expressionOperationSpan(const Expression &expression) {
+  return expression.operatorSpan.isValid() ? expression.operatorSpan
+                                           : expression.sourceSpan;
+}
+
+SourceSpan indexedSpan(const std::vector<SourceSpan> &spans,
+                       std::size_t index, const SourceSpan &fallback) {
+  return index < spans.size() && spans[index].isValid() ? spans[index]
+                                                        : fallback;
+}
 
 int findNameIndex(
     const std::vector<std::string> &names,
@@ -24,6 +43,7 @@ bool evaluateExpression(
     const std::vector<std::string> &variableNames,
     const std::vector<double> &variableValues,
     std::vector<std::string> &errors,
+    std::vector<SourceSpan> &errorSpans,
     const std::string &context
 ) {
   if (expression.type == ExpressionType::NumberLiteral) {
@@ -31,57 +51,60 @@ bool evaluateExpression(
       std::size_t processed = 0;
       value = std::stod(expression.text, &processed);
       if (processed != expression.text.size()) {
-        errors.push_back("Error: invalid number literal '" + expression.text +
-                         "' at line " + std::to_string(line));
+        appendError(errors, errorSpans,
+                    "Error: invalid number literal '" + expression.text +
+                        "' at line " + std::to_string(line),
+                    expression.sourceSpan);
         return false;
       }
     } catch (const std::out_of_range &) {
-      errors.push_back("Error: number literal '" + expression.text +
-                       "' out of range at line " + std::to_string(line));
+      appendError(errors, errorSpans,
+                  "Error: number literal '" + expression.text +
+                      "' out of range at line " + std::to_string(line),
+                  expression.sourceSpan);
       return false;
     } catch (const std::invalid_argument &) {
-      errors.push_back("Error: invalid number literal '" + expression.text +
-                       "' at line " + std::to_string(line));
+      appendError(errors, errorSpans,
+                  "Error: invalid number literal '" + expression.text +
+                      "' at line " + std::to_string(line),
+                  expression.sourceSpan);
       return false;
     }
     if (!std::isfinite(value)) {
-      errors.push_back("Error: non-finite number literal '" + expression.text +
-                       "' at line " + std::to_string(line));
+      appendError(errors, errorSpans,
+                  "Error: non-finite number literal '" + expression.text +
+                      "' at line " + std::to_string(line),
+                  expression.sourceSpan);
       return false;
     }
     return true;
   }
 
   if (expression.type == ExpressionType::Identifier) {
-    int variableIndex = findNameIndex(variableNames, expression.text);
+    const int variableIndex = findNameIndex(variableNames, expression.text);
     if (variableIndex == -1) {
-      errors.push_back("Error: undefined variable '" + expression.text +
-                       "' used at line " + std::to_string(line));
+      appendError(errors, errorSpans,
+                  "Error: undefined variable '" + expression.text +
+                      "' used at line " + std::to_string(line),
+                  expression.sourceSpan);
       return false;
     }
-
-    value = variableValues[variableIndex];
+    value = variableValues[static_cast<std::size_t>(variableIndex)];
     return true;
   }
 
   if (expression.type == ExpressionType::UnaryOperation) {
     double childValue = 0.0;
-    bool isValid = evaluateExpression(
-        expression.children[0],
-        line,
-        childValue,
-        variableNames,
-        variableValues,
-        errors,
-        context
-    );
-    if (!isValid) {
-      return false;
-    }
+    const bool isValid = evaluateExpression(
+        expression.children[0], line, childValue, variableNames,
+        variableValues, errors, errorSpans, context);
+    if (!isValid) return false;
     value = -childValue;
     if (!std::isfinite(value)) {
-      errors.push_back("Error: non-finite arithmetic result at line " +
-                       std::to_string(line));
+      appendError(errors, errorSpans,
+                  "Error: non-finite arithmetic result at line " +
+                      std::to_string(line),
+                  expressionOperationSpan(expression));
       return false;
     }
     return true;
@@ -96,64 +119,48 @@ bool evaluateExpression(
   }
 
   double accumulator = 0.0;
-  bool accumValid = evaluateExpression(
-      *curr,
-      line,
-      accumulator,
-      variableNames,
-      variableValues,
-      errors,
-      context
-  );
-
-  bool allValid = accumValid;
+  bool allValid = evaluateExpression(
+      *curr, line, accumulator, variableNames, variableValues, errors,
+      errorSpans, context);
 
   for (auto it = operations.rbegin(); it != operations.rend(); ++it) {
     const Expression *opNode = *it;
     double rightValue = 0.0;
-    bool rightValid = evaluateExpression(
-        opNode->children[1],
-        line,
-        rightValue,
-        variableNames,
-        variableValues,
-        errors,
-        context
-    );
-
-    if (!rightValid) {
-      allValid = false;
-    }
+    const bool rightValid = evaluateExpression(
+        opNode->children[1], line, rightValue, variableNames, variableValues,
+        errors, errorSpans, context);
+    if (!rightValid) allValid = false;
 
     if (allValid) {
       if (opNode->operation == '+') {
-        accumulator = accumulator + rightValue;
+        accumulator += rightValue;
       } else if (opNode->operation == '-') {
-        accumulator = accumulator - rightValue;
+        accumulator -= rightValue;
       } else if (opNode->operation == '*') {
-        accumulator = accumulator * rightValue;
+        accumulator *= rightValue;
       } else if (opNode->operation == '/') {
         if (rightValue == 0.0) {
-          errors.push_back("Error: division by zero in " + context + " at line " +
-                           std::to_string(line));
+          appendError(errors, errorSpans,
+                      "Error: division by zero in " + context + " at line " +
+                          std::to_string(line),
+                      expressionOperationSpan(*opNode));
           allValid = false;
         } else {
-          accumulator = accumulator / rightValue;
+          accumulator /= rightValue;
         }
       }
 
       if (allValid && !std::isfinite(accumulator)) {
-        errors.push_back("Error: non-finite arithmetic result at line " +
-                         std::to_string(line));
+        appendError(errors, errorSpans,
+                    "Error: non-finite arithmetic result at line " +
+                        std::to_string(line),
+                    expressionOperationSpan(*opNode));
         allValid = false;
       }
     }
   }
 
-  if (!allValid) {
-    return false;
-  }
-
+  if (!allValid) return false;
   value = accumulator;
   return true;
 }
@@ -164,15 +171,17 @@ SemanticResult checkSemantics(const Program &program) {
   SemanticResult result;
   result.parameterValues.resize(program.statements.size(), 0.0);
 
-  for (int i = 0; i < static_cast<int>(program.statements.size()); i = i + 1) {
+  for (std::size_t i = 0; i < program.statements.size(); ++i) {
     const Statement &statement = program.statements[i];
 
     if (statement.type == StatementType::QubitDeclaration) {
-      for (int j = 0; j < static_cast<int>(statement.names.size()); j = j + 1) {
+      for (std::size_t j = 0; j < statement.names.size(); ++j) {
         if (findNameIndex(result.qubitNames, statement.names[j]) != -1) {
-          result.errors.push_back("Error: qubit '" + statement.names[j] +
-                                  "' is already declared at line " +
-                                  std::to_string(statement.line));
+          appendError(result.errors, result.errorSpans,
+                      "Error: qubit '" + statement.names[j] +
+                          "' is already declared at line " +
+                          std::to_string(statement.line),
+                      indexedSpan(statement.nameSpans, j, statement.sourceSpan));
         } else {
           result.qubitNames.push_back(statement.names[j]);
         }
@@ -181,50 +190,49 @@ SemanticResult checkSemantics(const Program &program) {
     }
 
     if (statement.type == StatementType::VariableDeclaration) {
-      bool alreadyDefined =
+      const bool alreadyDefined =
           findNameIndex(result.variableNames, statement.variableName) != -1;
       if (alreadyDefined) {
-        result.errors.push_back("Error: variable '" + statement.variableName +
-                                "' is already declared at line " +
-                                std::to_string(statement.line));
+        appendError(result.errors, result.errorSpans,
+                    "Error: variable '" + statement.variableName +
+                        "' is already declared at line " +
+                        std::to_string(statement.line),
+                    statement.variableNameSpan);
       }
 
       double variableValue = 0.0;
-      bool isValid = evaluateExpression(
-          statement.variableExpression,
-          statement.line,
-          variableValue,
-          result.variableNames,
-          result.variableValues,
-          result.errors,
-          "declaration"
-      );
-
+      const bool isValid = evaluateExpression(
+          statement.variableExpression, statement.line, variableValue,
+          result.variableNames, result.variableValues, result.errors,
+          result.errorSpans, "declaration");
       if (isValid && !alreadyDefined) {
         result.variableNames.push_back(statement.variableName);
         result.variableValues.push_back(variableValue);
       }
       continue;
     }
+
     if (statement.gate == "measure") {
       std::vector<std::string> seenQubits;
-      for (int j = 0; j < static_cast<int>(statement.qubits.size()); j = j + 1) {
+      for (std::size_t j = 0; j < statement.qubits.size(); ++j) {
         if (findNameIndex(seenQubits, statement.qubits[j]) != -1) {
-          result.errors.push_back("Error: duplicate qubit '" +
-                                  statement.qubits[j] +
-                                  "' in measure statement at line " +
-                                  std::to_string(statement.line));
+          appendError(result.errors, result.errorSpans,
+                      "Error: duplicate qubit '" + statement.qubits[j] +
+                          "' in measure statement at line " +
+                          std::to_string(statement.line),
+                      indexedSpan(statement.qubitSpans, j, statement.sourceSpan));
         } else {
           seenQubits.push_back(statement.qubits[j]);
         }
       }
     }
 
-    for (int j = 0; j < static_cast<int>(statement.qubits.size()); j = j + 1) {
+    for (std::size_t j = 0; j < statement.qubits.size(); ++j) {
       if (findNameIndex(result.qubitNames, statement.qubits[j]) == -1) {
-        result.errors.push_back("Error: undeclared qubit '" +
-                                statement.qubits[j] + "' at line " +
-                                std::to_string(statement.line));
+        appendError(result.errors, result.errorSpans,
+                    "Error: undeclared qubit '" + statement.qubits[j] +
+                        "' at line " + std::to_string(statement.line),
+                    indexedSpan(statement.qubitSpans, j, statement.sourceSpan));
       }
     }
 
@@ -238,41 +246,42 @@ SemanticResult checkSemantics(const Program &program) {
 
     if (requiredArity != -1 &&
         static_cast<int>(statement.qubits.size()) != requiredArity) {
-      result.errors.push_back("Error: gate '" + statement.gate + "' needs " +
-                              std::to_string(requiredArity) +
-                              " qubit(s) at line " +
-                              std::to_string(statement.line));
+      appendError(result.errors, result.errorSpans,
+                  "Error: gate '" + statement.gate + "' needs " +
+                      std::to_string(requiredArity) +
+                      " qubit(s) at line " + std::to_string(statement.line),
+                  statement.sourceSpan);
     }
 
     if (statement.gate == "CNOT" && statement.qubits.size() == 2 &&
         statement.qubits[0] == statement.qubits[1]) {
-      result.errors.push_back(
-          "Error: CNOT control and target must differ at line " +
-          std::to_string(statement.line));
+      appendError(result.errors, result.errorSpans,
+                  "Error: CNOT control and target must differ at line " +
+                      std::to_string(statement.line),
+                  indexedSpan(statement.qubitSpans, 1, statement.sourceSpan));
     }
 
     if (statement.gate == "RZ" && !statement.hasParameter) {
-      result.errors.push_back("Error: gate 'RZ' needs a parameter at line " +
-                              std::to_string(statement.line));
+      appendError(result.errors, result.errorSpans,
+                  "Error: gate 'RZ' needs a parameter at line " +
+                      std::to_string(statement.line),
+                  statement.gateSpan);
     }
 
     if (statement.gate != "RZ" && statement.hasParameter) {
-      result.errors.push_back("Error: gate '" + statement.gate +
-                              "' does not take a parameter at line " +
-                              std::to_string(statement.line));
+      appendError(result.errors, result.errorSpans,
+                  "Error: gate '" + statement.gate +
+                      "' does not take a parameter at line " +
+                      std::to_string(statement.line),
+                  statement.gateSpan);
     }
 
     if (statement.hasParameter) {
       double parameterValue = 0.0;
       if (evaluateExpression(
-          statement.parameter,
-          statement.line,
-          parameterValue,
-          result.variableNames,
-          result.variableValues,
-          result.errors,
-          "gate parameter"
-      )) {
+              statement.parameter, statement.line, parameterValue,
+              result.variableNames, result.variableValues, result.errors,
+              result.errorSpans, "gate parameter")) {
         result.parameterValues[i] = parameterValue;
       }
     }

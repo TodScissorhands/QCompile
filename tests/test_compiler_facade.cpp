@@ -154,6 +154,132 @@ void testCompilerFacade() {
     require(result.diagnostics[0].message.find("division by zero") != std::string::npos,
             "diagnostic message mentions division by zero");
   }
+  // 8. Exact UTF-8-byte source spans use 1-based line/column and half-open ends.
+  {
+    const std::string lexicalSource = "qubit q0\nH q0 @\n";
+    const auto lexical = compiler::compileProgram(lexicalSource);
+    const auto &lexicalDiagnostic = lexical.diagnostics.at(0);
+    require(lexicalDiagnostic.line == 2 && lexicalDiagnostic.column == 6,
+            "lexical diagnostic begins at line 2, column 6");
+    require(lexicalDiagnostic.sourceSpan.start.offset == 14 &&
+                lexicalDiagnostic.sourceSpan.end.offset == 15 &&
+                lexicalDiagnostic.sourceSpan.end.line == 2 &&
+                lexicalDiagnostic.sourceSpan.end.column == 7,
+            "lexical diagnostic selects exactly the invalid character");
+
+    const std::string syntaxSource = "qubit q0\nH q0 q1\n";
+    const auto syntax = compiler::compileProgram(syntaxSource);
+    const auto &syntaxDiagnostic = syntax.diagnostics.at(0);
+    require(syntaxDiagnostic.line == 2 && syntaxDiagnostic.column == 6 &&
+                syntaxDiagnostic.sourceSpan.start.offset == 14 &&
+                syntaxDiagnostic.sourceSpan.end.offset == 16 &&
+                syntaxDiagnostic.sourceSpan.end.column == 8,
+            "parser diagnostic selects exactly the unexpected q1 token");
+
+    const auto eof = compiler::compileProgram("qubit q0\nH");
+    const auto &eofDiagnostic = eof.diagnostics.at(0);
+    require(eofDiagnostic.line == 2 && eofDiagnostic.column == 2 &&
+                eofDiagnostic.sourceSpan.start.offset == 10 &&
+                eofDiagnostic.sourceSpan.end.offset == 10 &&
+                eofDiagnostic.sourceSpan.end.column == 2,
+            "missing operand at EOF is a zero-length insertion point");
+
+    const std::string semanticSource =
+        "qubit q0\nmeasure q0, q0\nH missing\n";
+    const auto semantic = compiler::compileProgram(semanticSource);
+    require(semantic.diagnostics.size() == 2,
+            "same-line duplicate and later undeclared-qubit diagnostics are both retained");
+    const auto &duplicate = semantic.diagnostics[0];
+    require(duplicate.line == 2 && duplicate.column == 13 &&
+                duplicate.sourceSpan.start.offset == 21 &&
+                duplicate.sourceSpan.end.offset == 23 &&
+                duplicate.sourceSpan.end.column == 15,
+            "duplicate-measure diagnostic selects the second q0 on its line");
+    const auto &undeclared = semantic.diagnostics[1];
+    require(undeclared.line == 3 && undeclared.column == 3 &&
+                undeclared.sourceSpan.start.offset == 26 &&
+                undeclared.sourceSpan.end.offset == 33 &&
+                undeclared.sourceSpan.end.column == 10,
+            "undeclared-qubit diagnostic selects the offending identifier");
+
+    const auto sameLine =
+        compiler::compileProgram("qubit q0\nmeasure missing, missing\n");
+    require(sameLine.diagnostics.size() == 3,
+            "multiple semantic diagnostics on one line are preserved");
+    require(sameLine.diagnostics[0].line == 2 &&
+                sameLine.diagnostics[0].column == 18 &&
+                sameLine.diagnostics[0].sourceSpan.start.offset == 26 &&
+                sameLine.diagnostics[0].sourceSpan.end.offset == 33 &&
+                sameLine.diagnostics[1].line == 2 &&
+                sameLine.diagnostics[1].column == 9 &&
+                sameLine.diagnostics[1].sourceSpan.start.offset == 17 &&
+                sameLine.diagnostics[1].sourceSpan.end.offset == 24 &&
+                sameLine.diagnostics[2].line == 2 &&
+                sameLine.diagnostics[2].column == 18 &&
+                sameLine.diagnostics[2].sourceSpan.start.offset == 26 &&
+                sameLine.diagnostics[2].sourceSpan.end.offset == 33,
+            "same-line semantic diagnostics retain exact per-token spans");
+
+    const auto division =
+        compiler::compileProgram("qubit q0\nlet theta = 1 / 0\n");
+    const auto &divisionDiagnostic = division.diagnostics.at(0);
+    require(divisionDiagnostic.line == 2 && divisionDiagnostic.column == 15 &&
+                divisionDiagnostic.sourceSpan.start.offset == 23 &&
+                divisionDiagnostic.sourceSpan.end.offset == 24 &&
+                divisionDiagnostic.sourceSpan.end.column == 16,
+            "division-by-zero diagnostic selects the slash operator");
+
+    const std::string utf8Source = "#π\nH q0 @\n";
+    const auto utf8 = compiler::compileProgram(utf8Source);
+    const auto &utf8Diagnostic = utf8.diagnostics.at(0);
+    require(utf8Diagnostic.line == 2 && utf8Diagnostic.column == 6 &&
+                utf8Diagnostic.sourceSpan.start.offset == 9 &&
+                utf8Diagnostic.sourceSpan.end.offset == 10,
+            "source offsets count UTF-8 bytes while columns stay one-based");
+    const auto utf8EofTokens = Lexer("#π").tokenize();
+    const auto &utf8Eof = utf8EofTokens.back();
+    require(utf8Eof.line == 1 && utf8Eof.column == 4 &&
+                utf8Eof.sourceSpan.start.offset == 3,
+            "UTF-8 byte columns and offsets count both bytes of a multibyte character");
+    const std::string supplementaryCharacter = "\xF0\x9F\x98\x80";
+    const auto supplementary = compiler::compileProgram(
+        std::string("qubit q0\nH q0 ") + supplementaryCharacter + "\n");
+    const auto &supplementaryDiagnostic = supplementary.diagnostics.at(0);
+    require(supplementaryDiagnostic.line == 2 &&
+                supplementaryDiagnostic.column == 6 &&
+                supplementaryDiagnostic.sourceSpan.start.offset == 14 &&
+                supplementaryDiagnostic.sourceSpan.end.offset == 18 &&
+                supplementaryDiagnostic.sourceSpan.end.column == 10 &&
+                supplementaryDiagnostic.message.find(supplementaryCharacter) !=
+                    std::string::npos,
+            "unsupported supplementary code point has a complete UTF-8 byte span");
+
+    std::string malformedUtf8Source = "qubit q0\nH q0 ";
+    malformedUtf8Source.push_back(static_cast<char>(0xF0));
+    malformedUtf8Source.push_back(' ');
+    const auto malformedUtf8 =
+        compiler::compileProgram(malformedUtf8Source);
+    const auto &malformedDiagnostic = malformedUtf8.diagnostics.at(0);
+    require(malformedDiagnostic.sourceSpan.start.offset == 14 &&
+                malformedDiagnostic.sourceSpan.end.offset == 15 &&
+                malformedDiagnostic.line == 2 &&
+                malformedDiagnostic.column == 6,
+            "malformed UTF-8 preserves the existing first-byte error location");
+  }
+
+  // 9. Topology failures are global and remain explicitly unlocated.
+  {
+    compiler::CompilerOptions options;
+    options.targetTopology = compiler::CouplingMap(2);
+    const auto result = compiler::compileProgram(
+        "qubit q0, q1\nCNOT q0, q1\n", options);
+    require(!result.success && result.diagnostics.size() == 1,
+            "disconnected topology produces one routing diagnostic");
+    const auto &diagnostic = result.diagnostics[0];
+    require(diagnostic.line == 0 && diagnostic.column == 0 &&
+                !diagnostic.sourceSpan.isValid(),
+            "global routing diagnostic remains unlocated");
+  }
 }
 
 } // namespace test

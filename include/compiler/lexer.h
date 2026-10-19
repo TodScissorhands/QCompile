@@ -1,5 +1,7 @@
 #pragma once
 
+#include "compiler/source_location.h"
+
 #include <string>
 #include <vector>
 
@@ -27,6 +29,7 @@ struct Token {
   std::string text;
   int line;
   int column;
+  SourceSpan sourceSpan{};
 };
 
 class Lexer {

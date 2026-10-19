@@ -5,7 +5,6 @@
 #include "compiler/parser.h"
 #include "compiler/semantic_checker.h"
 
-#include <cctype>
 #include <exception>
 #include <string>
 #include <utility>
@@ -15,23 +14,16 @@ namespace compiler {
 
 namespace {
 
-int extractLineNumber(const std::string &message) {
-  const std::string pattern = " at line ";
-  const std::size_t pos = message.rfind(pattern);
-  if (pos != std::string::npos) {
-    const std::size_t start = pos + pattern.size();
-    if (start < message.size() &&
-        std::isdigit(static_cast<unsigned char>(message[start]))) {
-      try {
-        std::size_t processed = 0;
-        int line = std::stoi(message.substr(start), &processed);
-        return line;
-      } catch (...) {
-        return 0;
-      }
-    }
+Diagnostic makeDiagnostic(const std::string &message, SourceSpan span = {}) {
+  Diagnostic diagnostic;
+  diagnostic.severity = DiagnosticSeverity::Error;
+  diagnostic.message = message;
+  if (span.isValid()) {
+    diagnostic.sourceSpan = span;
+    diagnostic.line = span.start.line;
+    diagnostic.column = span.start.column;
   }
-  return 0;
+  return diagnostic;
 }
 
 } // namespace
@@ -47,14 +39,12 @@ CompilationResult compileProgram(
   try {
     Lexer lexer(sourceText);
     tokens = lexer.tokenize();
+  } catch (const SourceLocatedError &error) {
+    result.diagnostics.push_back(makeDiagnostic(error.what(), error.span()));
+    result.success = false;
+    return result;
   } catch (const std::exception &error) {
-    const std::string msg = error.what();
-    result.diagnostics.push_back({
-        DiagnosticSeverity::Error,
-        msg,
-        extractLineNumber(msg),
-        0
-    });
+    result.diagnostics.push_back(makeDiagnostic(error.what()));
     result.success = false;
     return result;
   }
@@ -63,14 +53,12 @@ CompilationResult compileProgram(
   try {
     Parser parser(std::move(tokens));
     result.program = parser.parse();
+  } catch (const SourceLocatedError &error) {
+    result.diagnostics.push_back(makeDiagnostic(error.what(), error.span()));
+    result.success = false;
+    return result;
   } catch (const std::exception &error) {
-    const std::string msg = error.what();
-    result.diagnostics.push_back({
-        DiagnosticSeverity::Error,
-        msg,
-        extractLineNumber(msg),
-        0
-    });
+    result.diagnostics.push_back(makeDiagnostic(error.what()));
     result.success = false;
     return result;
   }
@@ -79,13 +67,12 @@ CompilationResult compileProgram(
   SemanticResult semanticResult = checkSemantics(result.program);
   if (!semanticResult.errors.empty()) {
     result.diagnostics.reserve(semanticResult.errors.size());
-    for (const auto &err : semanticResult.errors) {
-      result.diagnostics.push_back({
-          DiagnosticSeverity::Error,
-          err,
-          extractLineNumber(err),
-          0
-      });
+    for (std::size_t i = 0; i < semanticResult.errors.size(); ++i) {
+      const SourceSpan span = i < semanticResult.errorSpans.size()
+                                  ? semanticResult.errorSpans[i]
+                                  : SourceSpan{};
+      result.diagnostics.push_back(
+          makeDiagnostic(semanticResult.errors[i], span));
     }
     result.success = false;
     return result;

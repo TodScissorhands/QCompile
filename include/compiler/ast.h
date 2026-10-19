@@ -1,5 +1,7 @@
 #pragma once
 
+#include "compiler/source_location.h"
+
 #include <iosfwd>
 #include <string>
 #include <vector>
@@ -23,6 +25,8 @@ struct Expression {
   char operation = '\0';
   // binary expression -> two children; unary minus -> one children.
   std::vector<Expression> children = {};
+  SourceSpan sourceSpan;
+  SourceSpan operatorSpan;
 };
 
 struct Statement {
@@ -35,6 +39,11 @@ struct Statement {
   std::vector<std::string> qubits = {};
   bool hasParameter = false;
   Expression parameter = {};
+  std::vector<SourceSpan> nameSpans = {};
+  SourceSpan variableNameSpan;
+  SourceSpan gateSpan;
+  std::vector<SourceSpan> qubitSpans = {};
+  SourceSpan sourceSpan;
 };
 
 struct Program {

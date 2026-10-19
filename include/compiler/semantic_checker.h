@@ -11,6 +11,8 @@ struct SemanticResult {
   std::vector<std::string> variableNames;
   std::vector<double> variableValues;
   std::vector<double> parameterValues;
+  // Kept parallel to errors; invalid spans mark unlocated/global errors.
+  std::vector<SourceSpan> errorSpans;
 };
 
 SemanticResult checkSemantics(const Program &program);
