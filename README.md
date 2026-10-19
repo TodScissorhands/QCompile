@@ -1,206 +1,163 @@
 # QCompile
 
-QCompile is a domain-specific language (DSL) compiler and classical statevector simulator for quantum circuits, developed in C++17. It translates high-level quantum circuit definitions into simulator instructions, validates semantics and arithmetic expressions, performs adjacent-gate cancellation optimizations, and simulates state evolution and Pauli expectations on a statevector. It also provides fixed H₂ and HeH⁺ VQE benchmarks, geometry-generated H₂ and a fixed LiH active-space benchmark, an interactive Qt6 desktop workbench, and a local loopback dashboard.
+QCompile is a C++17 compiler for a small quantum-circuit DSL, an optimizer and classical statevector simulator, and a molecular-computing workbench. It is intended for education and experimentation with circuit compilation, simulation, and small molecular benchmarks. Circuits run on a classical computer; QCompile does not execute on physical quantum hardware.
 
----
+## Features
 
-## Architecture Overview
+- Lexer tokens retain source locations; a recursive-descent parser builds an AST, including arithmetic expression trees. Semantic checking validates declarations, operands, gate parameters, and expression values before instruction generation.
+- Compiler diagnostics include source positions. The circuit optimizer uses a DAG to cancel recognized inverse pairs and merge finite RZ rotations when permitted by supported commutation rules; measurements act as barriers.
+- Classical statevector simulation applies H, X, Z, CNOT, and RZ, computes Pauli expectations, and samples/projectively applies measurements using a seeded PRNG. `SimulationSession` supports circuit stepping and state inspection.
+- Fixed H₂ and HeH⁺ variational benchmarks, an STO-3G H₂ integral-engine path, and a five-geometry H₂ energy sweep are implemented. The Qt6 workbench combines circuit editing/inspection and stepped execution with molecular calculations, energy/convergence plots, saved experiments, and experiment comparisons.
+- Experiment bundles persist circuit and execution data and, where present, chemistry results; comparison entries use bundle IDs where unique and file identity to distinguish saved experiments.
+- Automated C++ tests and command-line compiler, H₂, HeH⁺, and benchmark-catalog programs are provided. The GUI also has an offscreen smoke-test mode.
 
-```text
-Source File (.txt)
-       │
-       ▼
- ┌───────────┐
- │   Lexer   │  Tokenizes keywords, gates, identifiers, literals, operators
- └─────┬─────┘
-       │
-       ▼
- ┌───────────┐
- │  Parser   │  Constructs AST with recursive-descent arithmetic expressions
- └─────┬─────┘
-       │
-       ▼
- ┌───────────┐
- │ Semantic  │  Validates qubit declarations, gate arities, unique CNOT pairs,
- │  Checker  │  and statically evaluates parameter expressions
- └─────┬─────┘
-       │
-       ▼
- ┌───────────┐
- │   Code    │  Emits flat simulator instructions with integer qubit indices
- │ Generator │
- └─────┬─────┘
-       │
-       ▼
- ┌───────────┐
- │ Optimizer │  Cancels adjacent identical self-inverse gates (H, X, Z, CNOT)
- └─────┬─────┘
-       │
-       ▼
- ┌───────────┐
- │ Simulator │  Evolves statevector ($2^n$ complex amplitudes), computes Pauli
- └───────────┘  expectations, and samples measurement outcomes
+## Implementation gallery
+
+![Qt6 workbench showing the H₂ geometry schematic, five-point energy scan, circuit instructions, and statevector inspector](docs/images/h2_workbench.png)
+
+*The repository screenshot shows the workbench’s circuit-execution and molecular-energy interfaces.*
+
+![Bell-state compiler and simulator output](docs/images/bell_state_output.png)
+
+*Captured CLI output for the Bell-state sample.*
+
+## Architecture
+
+The compiler CLI follows this pipeline; the chemistry and GUI components are related consumers of the simulator/compiler facilities, not required stages of every DSL compilation.
+
+```mermaid
+flowchart LR
+  S[DSL source] --> L[Lexer]
+  L --> P[Parser / AST]
+  P --> C[Semantic checker]
+  C --> G[Instruction generation]
+  G --> O[Optimizer]
+  O --> V[Classical statevector simulator]
 ```
 
-### Subsystems and Directory Structure
+- `src/compiler/` and `include/compiler/` implement lexing, AST parsing, semantic validation, instruction generation, diagnostics, circuit DAG optimization, and routing utilities. `src/apps/main.cpp` connects the source-file compiler and simulator.
+- `src/simulator/` and `include/simulator/` implement statevector gates, measurement, Pauli expectations, and stepped `SimulationSession` execution.
+- `src/chemistry/` and `include/chemistry/` contain Hamiltonians, eigensolvers, molecular integrals, benchmark models, and VQE routines. `src/apps/` provides command-line entry points.
+- `src/gui/` implements the Qt6 workbench and circuit view. `src/experiment/` persists and compares experiment bundles; these facilities are also used by the GUI.
 
-| Subsystem | Headers | Implementation | Purpose |
-| :--- | :--- | :--- | :--- |
-| **Compiler** | `include/compiler/` | `src/compiler/` | Lexer, AST parser, semantic checker, code generator, and DAG-based circuit optimizer |
-| **Simulator** | `include/simulator/` | `src/simulator/` | Statevector simulator, single/two-qubit gates, measurement, and Pauli expectations |
-| **Chemistry** | `include/chemistry/` | `src/chemistry/` | Qubit Hamiltonians, Jacobi eigensolver, H₂ VQE, HeH⁺ VQE, and benchmark catalog |
-| **GUI** | — | `src/gui/h2_lab.cpp` | Qt6 desktop workbench with Quantum Circuit Workbench, Molecular PES Laboratory, and Comparison Inspector |
-| **Apps** | — | `src/apps/` | Entry points: `qcompile`, `qcompile_h2`, `qcompile_heh`, `qcompile_benchmarks` |
+## Language guide
 
----
+Statements are line-oriented. Blank lines are accepted. Qubits and variables must be declared before use:
 
-## Supported Language Constructs
-
-The QCompile DSL uses line-oriented syntax:
-
-- **Qubit Declarations**: `qubit q0, q1, q2`
-- **Variable Declarations**: `let theta = 0.5`, `let phi = 2 * 3.14159 / 4`
-- **Unitary Gates**:
-  - Fixed: `H <qubit>`, `X <qubit>`, `Z <qubit>`, `CNOT <control>, <target>`
-  - Parameterized: `RZ(<expression>) <qubit>`
-- **Arithmetic Expressions**: Supports literals, identifiers, unary `-`, binary `+`, `-`, `*`, `/`, and parentheses with standard operator precedence.
-- **Measurements**: `measure <qubit> [, <qubit>...]`
-
-Example Bell-state circuit (`samples/bell_state.txt`):
 ```text
 qubit q0, q1
+let theta = 2 * 3.14159 / 4
 H q0
 CNOT q0, q1
+RZ(theta) q1
 measure q0, q1
 ```
 
----
+This is the same syntax as the supplied Bell-state circuit in `samples/bell_state.txt`, with a variable and parameterized rotation added.
 
-## Implementation
+Supported declarations are `qubit name[, name...]` and `let name = expression`. The implemented gates are `H q`, `X q`, and `Z q` (one qubit), `CNOT control, target` (two distinct qubits), and `RZ(expression) q` (one qubit and a required parameter). `measure q[, q...]` measures the named qubits. Gate and measurement operands must refer to declared qubits. Only RZ accepts a parameter; the parser’s broader optional-parentheses syntax is rejected by semantic validation for other operations.
 
-The implementation provides command-line compiler/simulator tools alongside visual workbench interfaces:
+Expressions support integer/decimal literals, previously declared variables, unary minus, parentheses, and `+`, `-`, `*`, `/`. Multiplication and division bind more tightly than addition and subtraction. Invalid tokens and grammar produce source-located lexer/parser diagnostics; semantic errors include undeclared names, invalid gate arity/operands, duplicate or invalid declarations, and invalid parameter expressions. There is no control-flow syntax.
 
-| Terminal Simulation Output | Interactive Qt6 H₂ Workbench |
-| :---: | :---: |
-| ![Bell-state compiler and simulator output](docs/images/bell_state_output.png) | ![Qt6 H2 Workbench displaying potential energy curve and circuit inspection](docs/images/h2_workbench.png) |
-| *Compilation trace, optimization pass, and statevector measurement output for a 2-qubit Bell state.* | *Native Qt6 H₂ workbench displaying potential energy surface scan and statevector inspection.* |
+## Build and installation
 
----
+Requirements: a C++17 compiler (the Makefile defaults to `g++`), GNU `make`, and a POSIX-like environment for the Makefile’s symlink commands. Building the GUI additionally requires Qt6 Widgets development files and `pkg-config` (the Makefile invokes `pkg-config Qt6Widgets`). The Makefile does not enforce a specific compiler version.
 
-## Prerequisites and Build Instructions
-
-### Requirements
-- **C++17 Compiler**: `g++` (GCC $\ge$ 9) or `clang++`
-- **Build System**: GNU `make`
-- **Qt6 Widgets** *(optional, for `qcompile_lab`)*: `qt6-base-dev` and `pkg-config`
-- **Node.js** *(optional, for loopback dashboard)*: Node.js $\ge$ 18
-
-### Building
-
-From the repository root:
-
-```bash
-# Build compiler, simulator, and benchmark CLIs (qcompile, qcompile_h2, qcompile_heh, qcompile_benchmarks)
-make all
-
-# Build the Qt6 workbench (requires Qt6 development libraries)
-make qcompile_lab
-
-# Build the regression test suite
+```sh
+make all           # qcompile, qcompile_h2, qcompile_heh, qcompile_benchmarks
 make qcompile_tests
-
-# Remove build artifacts
-make clean
+make qcompile_lab  # requires Qt6 Widgets
 ```
 
----
+Executables are linked at the repository root and built under `build/<configuration>/bin/`. Use `BUILD=debug` for a debug build; release is the default. `make test` builds and runs the test executable. `make clean` removes generated build artifacts and binaries.
 
-## Execution Guide
+## Usage
 
-### 1. Quantum Circuit DSL Compiler
-Compile and simulate a DSL circuit:
-```bash
+Build the command-line tools before using the following commands:
+
+```sh
 ./qcompile samples/bell_state.txt
 ```
-Run other provided sample programs:
-```bash
-./qcompile samples/single_gate.txt
-./qcompile samples/sequential_gates.txt
-./qcompile samples/three_qubit.txt
-./qcompile samples/parameterized_gate.txt
-./qcompile samples/precedence_check.txt
-```
 
-### 2. Regression Test Suite
-Run the complete regression suite:
-```bash
+Compiles and simulates the supplied Bell-state program, printing token/AST/instruction information and measurement probabilities/result.
+
+```sh
 make test
-# or directly:
-./qcompile_tests
 ```
-The suite covers the compiler, optimizer, simulator, workbench integration, molecular integrals, and VQE.
 
-Test modules under `tests/` include `test_lexer.cpp`, `test_parser.cpp`, `test_semantics.cpp`, `test_optimizer.cpp`, `test_simulator.cpp`, `test_chemistry.cpp`, `test_compiler_facade.cpp`, `test_simulation_session.cpp`, `test_workbench_integration.cpp`, `test_experiment_bundle.cpp`, `test_molecular_integral_engine.cpp`, `test_circuit_dag.cpp`, `test_coupling_map.cpp`, and `test_vqe_optimizer.cpp`. Shared fixtures and assertions are in `test_support.h` / `test_support.cpp`.
+Builds and runs the C++ regression suite.
 
-### 3. Molecular Chemistry Benchmarks
-Run the fixed molecular benchmarks and catalog CLI:
-```bash
-# Fixed H2 VQE benchmark (2 qubits, parity mapping, STO-3G at 0.735 Å)
+```sh
 ./qcompile_h2
-
-# Fixed HeH+ VQE benchmark (4 qubits, Jordan-Wigner, STO-3G at 1.463283 bohr)
 ./qcompile_heh
+```
 
-# Native STO-3G H2 integral-engine checks (distances in Angstrom)
-./qcompile_benchmarks --engine-h2 0.735
-./qcompile_benchmarks --engine-h2 1.400
+Run the fixed H₂ and HeH⁺ variational benchmarks respectively; each prints its benchmark calculation and energy results.
 
-# Fixed LiH (1 frozen core orbital, 2 active orbitals; exact active-space benchmark)
-./qcompile_benchmarks --engine-lih
-
-# Independent PySCF LiH active-space reference
-benchmarks/heh_plus/.venv-generator/bin/python -B \
-  benchmarks/lih_active_space/validate_pyscf_lih.py
-
-# Benchmark catalog CLI
+```sh
 ./qcompile_benchmarks --list
 ./qcompile_benchmarks h2
 ./qcompile_benchmarks heh_plus
-./qcompile_benchmarks --json-list
-./qcompile_benchmarks --json h2
 ```
 
-### 4. Interactive Qt6 H₂ Workbench
-Launch the native graphical workbench:
-```bash
+Lists the catalog or runs a catalog benchmark. For H₂ integral-engine calculations at selected distances in ångströms, use `./qcompile_benchmarks --engine-h2 0.735`; `--engine-lih` is another implemented benchmark option.
+
+```sh
+make qcompile_lab
 ./qcompile_lab
 ```
-Run the automated offscreen smoke verification:
-```bash
+
+Launches the Qt6 GUI. The Quantum Circuit Workbench lets you enter DSL source, inspect the generated circuit, step execution, and view statevector data. The Molecular PES Laboratory provides H₂ calculations and energy/convergence plots. The Comparison Inspector loads `.qcomp` experiment bundles; load at least two bundles to compare properties and reported deltas. Save experiments from the workbench before adding them in the comparison view.
+
+For a non-interactive GUI smoke check where Qt’s offscreen platform plugin is available:
+
+```sh
 QT_QPA_PLATFORM=offscreen ./qcompile_lab --smoke-test
 ```
 
-### 5. Loopback Scientific Dashboard
-Start the local HTTP dashboard:
-```bash
-node dashboard/server.js
+The smoke test exercises workbench calculations and GUI workflows without requiring a visible desktop window.
+
+## Chemistry and numerical methods
+
+The fixed H₂ and HeH⁺ models use STO-3G benchmark data. The code constructs qubit Hamiltonians and evaluates variational trial circuits with the classical simulator; symmetric eigensolver routines provide reference ground-state energies for the implemented sectors. H₂’s optimizer searches a one-parameter trial family; HeH⁺ uses a two-parameter singlet trial family and a multi-start coordinate/golden-section search. These are small benchmark-specific optimizations, not general-purpose chemistry or quantum optimizers.
+
+The GUI’s H₂ geometry sweep evaluates five discrete distances (0.735, 0.900, 1.100, 1.250, and 1.400 Å in the current smoke-tested workflow). At each geometry, the STO-3G calculation reports variational electronic energy and adds the nuclear-repulsion contribution to obtain total Born–Oppenheimer energy:
+
+`E_total = E_electronic + E_nuclear-repulsion`.
+
+The plotted molecular potential energy is the total energy, not the electronic term alone. Electronic and nuclear-repulsion terms are also shown separately in calculation results. The five samples are a coarse demonstration sweep; they do not establish a high-resolution or universally validated potential-energy curve. `benchmarks/h2_geometry/` contains related generation and validation utilities.
+
+## Testing and verification
+
+The current test target is `qcompile_tests`, run with `make test`. Running the repository’s existing test executable produced **1586 passing assertions**. The test sources cover compiler stages, optimizer, simulator/session, chemistry and molecular integrals, VQE optimization, experiment bundles, and workbench integration.
+
+The Qt GUI smoke test was run as `QT_QPA_PLATFORM=offscreen ./qcompile_lab --smoke-test`; it reported success after testing two distinct geometries and five fresh sweep calculations. This is GUI smoke coverage, not exhaustive interactive/manual testing. Fixed benchmark programs are separate benchmark runs and are not substitutes for the automated suite.
+
+## Repository map
+
+```text
+include/       Public headers grouped by compiler, simulator, chemistry, GUI, experiment
+src/           C++ implementation: apps, compiler, simulator, chemistry, GUI, experiment
+tests/         Automated C++ test suite and shared test support
+samples/       DSL examples and invalid-input examples
+benchmarks/    Molecular reference data, generation, and validation utilities
+dashboard/     Optional local web dashboard (Node.js)
+docs/          Reports and repository screenshots
+Makefile       Build, test, and clean targets
+README.md      Getting-started guide
+DOCUMENTATION.md  Detailed technical reference
 ```
-Open `http://127.0.0.1:4173` in a web browser. The server executes allowlisted benchmarks via `qcompile_benchmarks --json <id>` over loopback.
 
----
+## Limitations
 
-## Technical Limitations
+- Statevector storage scales as $2^n$ complex amplitudes. The simulator’s configured upper bound is 24 qubits (about 256 MiB for amplitudes alone); execution sessions also retain intermediate states and have an additional memory budget.
+- The DSL is a small line-oriented language without control flow, general gate decomposition, or arbitrary gate definitions. Its unitary set is H, X, Z, CNOT, and RZ.
+- Measurement samples a computational-basis outcome with a fixed-seed PRNG and projects the state to the observed outcome. It is a single-shot classical simulation behavior, not hardware sampling or noise modeling.
+- The simulator is a classical statevector implementation. QCompile has no direct physical-hardware backend. Molecular models and geometry support are limited to the implemented benchmark paths, not an arbitrary quantum-chemistry package.
 
-- **Statevector Scaling**: The simulator allocates $2^n$ complex amplitudes (`std::complex<double>`) and supports at most 24 qubits; one 24-qubit statevector uses about 256 MiB. Interactive `SimulationSession`s additionally cap the combined statevector payload of the active simulator and retained step snapshots at 512 MiB, excluding allocator and other process overhead. At 24 qubits the initial session uses that full cap, so its first execution step is rejected before applying the instruction.
-- **Measurement Model**: Measurements calculate probabilities, sample basis outcomes using a seeded PRNG (`std::mt19937`), project the statevector onto the observed subspace, and renormalize, preserving conditional states and entanglement on unmeasured qubits.
-- **Gate Set**: Supported unitary operations are restricted to `H`, `X`, `Z`, `CNOT`, and `RZ`. General arbitrary single-qubit rotations or multi-qubit controlled gates require decomposition before input.
-- **Optimizer Scope**: The DAG optimizer cancels recognized matching H/X/Z and ordered CNOT pairs and merges finite RZ rotations. It can bring eligible operations together across explicitly commuting gates, including disjoint supports and specified Z/RZ–CNOT cases; measurements are barriers. It does not perform general gate synthesis or hardware scheduling.
-- **Chemistry Benchmarks**: The H₂, HeH⁺, and LiH commands validate fixed STO-3G models and specified symmetry/active-space sectors. They are not an arbitrary quantum chemistry platform; geometry-generated support is restricted to the documented H₂ path.
+## Further documentation
 
----
-
-## References and Documentation
-
-For complete technical specifications, language grammar, error catalogs, eigensolver derivations, and chemistry provenance, refer to the [Technical Reference Manual (`DOCUMENTATION.md`)](DOCUMENTATION.md).
-
-The current scientific benchmark evidence and reproduction notes are consolidated in [the MS10 validation report](docs/MS10_FINAL_REPORT.md).
+- [Technical reference manual](DOCUMENTATION.md)
+- [Compiler source](src/compiler/), [simulator source](src/simulator/), [chemistry source](src/chemistry/), and [GUI source](src/gui/)
+- [Samples](samples/), [benchmark materials](benchmarks/), and [validation report](docs/MS10_FINAL_REPORT.md)
+- [QCompile GitHub repository](https://github.com/TodScissorhands/QCompile)
